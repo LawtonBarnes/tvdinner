@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+assets/sample_thumbnail.jpg
+render_output.png

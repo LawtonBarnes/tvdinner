@@ -38,33 +38,6 @@ def parse_media_filename(filename):
     return underscores_to_spaces(artist_raw), underscores_to_spaces(title_raw)
 
 
-def truncate_hard(text, max_len):
-    """Hard cut, no ellipsis -- used for the Artist line (Main Title line 1)."""
-    return text[:max_len]
-
-
-def truncate_on_space(text, max_len):
-    """Cut to max_len, then back off to the last space so we don't cut mid-word.
-    If there's no space to back off to, falls back to a hard cut."""
-    if len(text) <= max_len:
-        return text
-    cut = text[:max_len]
-    last_space = cut.rfind(" ")
-    return cut[:last_space] if last_space > 0 else cut
-
-
-def wrap_title_two_lines(title, total_max=40, line_max=20):
-    """Wrap on spaces (former underscores) across up to 2 lines, total_max chars.
-    Truncates on a space if the title is still too long to fit both lines."""
-    title = truncate_on_space(title, total_max)
-    if len(title) <= line_max:
-        return [title, ""]
-    line1 = truncate_on_space(title, line_max)
-    remainder = title[len(line1):].strip()
-    line2 = truncate_on_space(remainder, line_max) if len(remainder) > line_max else remainder
-    return [line1, line2]
-
-
 def format_duration(total_seconds):
     """Seconds -> HH:MM:SS / M:SS with no leading zero on the leading unit."""
     total_seconds = int(round(total_seconds))
