@@ -62,8 +62,9 @@ CLOCK_RECT = cell_rect("A", 1)
 # no longer butts flush against THUMBNAIL_BOX (485) with zero gap.
 # x centers the zone roughly between the logo (right edge ~178px) and
 # THUMBNAIL_BOX (left edge 485px), nudged a little further right than
-# true center (331.5) per the user's request.
-TITLE_ZONE = (220, 44, 250, 118)
+# true center (331.5) per the user's request; then bumped 10px left and
+# 3px down per a follow-up tweak.
+TITLE_ZONE = (210, 47, 250, 118)
 THUMBNAIL_BOX = (485, 40, 180, 120)
 # Actual image size, centered inside THUMBNAIL_BOX. Base 4:3 (160x120)
 # stretched an extra 110% on width only, to compensate for the source's
