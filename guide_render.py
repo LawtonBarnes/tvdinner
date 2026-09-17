@@ -35,7 +35,8 @@ def draw_text_left(surface, font, text, color, x, y):
 
 def draw_clock(surface, font, clock_text):
     x, y, w, h = layout.CLOCK_RECT
-    draw_text_centered(surface, font, clock_text, CLOCK_COLOR, x + w // 2, y + (h - font.get_height()) // 2)
+    center_x = x + w // 2 + layout.COLUMN_A_TEXT_OFFSET_X
+    draw_text_centered(surface, font, clock_text, CLOCK_COLOR, center_x, y + (h - font.get_height()) // 2)
 
 
 def draw_channel_column(surface, font, channels):
