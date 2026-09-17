@@ -3,3 +3,6 @@ __pycache__/
 assets/sample_thumbnail.jpg
 render_output.png
 nav_demo_frames/
+run_app_debug.py
+simulate_remote.py
+real_index_render.png

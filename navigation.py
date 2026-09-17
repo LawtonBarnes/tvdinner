@@ -112,6 +112,17 @@ class NavigationState:
         """(col, row) for the renderer's draw_highlight -- row is always 2-4."""
         return self.highlight_col, self.highlight_row
 
+    def current_indices(self):
+        """(channel_index, program_index) -- absolute indices into
+        self.channels / that channel's programs list, for handing off to
+        the playback controller."""
+        channel_index = self._current_channel_index()
+        count = self._program_count(channel_index)
+        start = self.channel_window_start[channel_index]
+        offset = COLUMN_OFFSETS[self.highlight_col]
+        program_index = (start + offset) % count
+        return channel_index, program_index
+
     def focused_program(self):
         channel_index = self._current_channel_index()
         channel = self.channels[channel_index]
