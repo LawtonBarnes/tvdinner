@@ -38,6 +38,14 @@ def parse_media_filename(filename):
     return underscores_to_spaces(artist_raw), underscores_to_spaces(title_raw)
 
 
+def format_clock_12h(dt):
+    """datetime -> 'H:MM', 12-hour, no leading zero on the hour (e.g. '3:07', '12:45')."""
+    hour = dt.hour % 12
+    if hour == 0:
+        hour = 12
+    return f"{hour}:{dt.minute:02d}"
+
+
 def format_duration(total_seconds):
     """Seconds -> HH:MM:SS / M:SS with no leading zero on the leading unit."""
     total_seconds = int(round(total_seconds))
