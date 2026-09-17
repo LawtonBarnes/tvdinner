@@ -40,6 +40,12 @@ VISIBLE_CHANNEL_ROWS = (2, 3, 4, 5)
 VISIBLE_PROGRAM_COLS = ("B", "C", "D")
 HIGHLIGHTABLE_ROWS = (2, 3, 4)  # confirmed by user: highlight never reaches row 5
 
+# Column A's cell rect deliberately bleeds 4px off the left edge of the
+# canvas (x=-4). NTSC-safe-title margin for cheap/overscanning CRTs means
+# the text itself needs to sit further right than the cell's own center --
+# this nudges just the drawn text, not the cell geometry.
+COLUMN_A_TEXT_OFFSET_X = 16
+
 
 def cell_rect(col, row):
     x, w = COLUMNS[col]
@@ -51,9 +57,15 @@ def cell_rect(col, row):
 # not literal CSV layer bounds (those were per-sample-content text boxes, not a
 # generic content-agnostic anchor).
 CLOCK_RECT = cell_rect("A", 1)
-TITLE_ZONE = (180, 44, 305, 118)  # x, y, w, h -- 4 centered lines drawn inside this
+# x, y, w, h -- 3 centered lines drawn inside this (ARTIST / TITLE / TRT).
+# Width trimmed ~4 characters' worth from the original 305px so the zone
+# no longer butts flush against THUMBNAIL_BOX (485) with zero gap.
+TITLE_ZONE = (180, 44, 250, 118)
 THUMBNAIL_BOX = (485, 40, 180, 120)
-THUMBNAIL_SIZE = (160, 120)  # actual image size, centered inside THUMBNAIL_BOX
+# Actual image size, centered inside THUMBNAIL_BOX. Base 4:3 (160x120)
+# stretched an extra 110% on width only, to compensate for the source's
+# non-square pixels -- height unchanged.
+THUMBNAIL_SIZE = (176, 120)
 
 CELL_TEXT_PADDING_X = 14
 CELL_TEXT_PADDING_Y = 10

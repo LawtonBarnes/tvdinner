@@ -63,6 +63,16 @@ class FrameBuffer:
                 self.mm.seek(y * self.stride)
                 self.mm.write(raw[y * self.row_bytes : (y + 1) * self.row_bytes])
 
+    def fill_black(self):
+        """Paints the whole framebuffer black. Used once when entering
+        playback mode: mpv's --vo=drm takes real DRM master directly, but if
+        it ever momentarily drops master during a file transition (observed
+        as a split-second flash of the GUIDE, since fbdev still held the
+        last-rendered guide frame), black shows through instead of stale
+        guide content."""
+        self.mm.seek(0)
+        self.mm.write(b"\x00" * (self.stride * self.height))
+
     def close(self):
         self.mm.close()
         os.close(self.fd)

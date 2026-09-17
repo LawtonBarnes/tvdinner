@@ -110,6 +110,7 @@ class TvDinnerApp:
 
     def enter_playback(self):
         channel_index, program_index = self.nav.current_indices()
+        self.fb.fill_black()  # nothing stale left over for a DRM-master hiccup to expose
         mpv = MpvController()
         overlays = OverlayManager(mpv, self.overlay_renderer)
         self.player = PlaybackController(mpv, overlays, self.channels)
@@ -118,6 +119,7 @@ class TvDinnerApp:
         self.mode = "playback"
 
     def exit_playback(self):
+        self.nav.sync_to(self.player.channel_index, self.player.program_index)
         self.selector.unregister(self.player.mpv.fileno())
         self.player.stop()
         self.player = None
@@ -135,7 +137,9 @@ class TvDinnerApp:
             self.nav.handle_left()
         elif code == ecodes.KEY_RIGHT:
             self.nav.handle_right()
-        elif code in OK_CODES:
+        elif code in OK_CODES or code in BACK_CODES:
+            # BACK from the guide plays the currently highlighted program,
+            # same as OK -- BACK no longer quits/relaunches the app here.
             self.enter_playback()
             return
         else:
@@ -164,8 +168,6 @@ class TvDinnerApp:
     def handle_keycode(self, code):
         if code in HOME_CODES:
             return "quit_home"
-        if self.mode == "guide" and code in BACK_CODES:
-            return "quit"
         if self.mode == "guide":
             self.handle_guide_keycode(code)
         else:
@@ -192,9 +194,7 @@ class TvDinnerApp:
                         for event in events:
                             if event.type == ecodes.EV_KEY and event.value == 1:  # key down only
                                 result = self.handle_keycode(event.code)
-                                if result == "quit":
-                                    running = False
-                                elif result == "quit_home":
+                                if result == "quit_home":
                                     self.pending_exit_code = 1
                                     running = False
                             if not running:

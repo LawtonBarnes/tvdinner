@@ -16,7 +16,12 @@ exactly as specified:
   the next program in the same channel and keeps playing, same as a real
   TV channel continuing to its next scheduled program -- not a documented
   requirement, but the obvious behavior for a "channel" that isn't just a
-  single video.
+  single video. No SKIP overlay and no guide flash on this transition
+  (confirmed bug, 2026-09-17) -- it should read as one continuous channel,
+  not a series of user-visible skips. See _advance_to_next_program() and
+  app.py's enter_playback() (which paints the framebuffer black once on
+  entry so nothing stale can show through if mpv ever drops DRM master
+  mid-transition).
 
 Channel-changing here is deliberately independent state from the guide's
 own NavigationState -- selecting OK on a highlighted program starts
@@ -26,6 +31,7 @@ model: the guide is where you browse, playback is where you watch).
 """
 
 INDICATOR_DURATION_S = 2.0
+CH_INDICATOR_DURATION_S = INDICATOR_DURATION_S * 2  # CH indicator stays up ~double as long (user request)
 
 
 class PlaybackController:
@@ -59,7 +65,7 @@ class PlaybackController:
         self.overlays.hide("pause")
         if show_channel_indicator:
             channel_number = f"{self._channel()['number']:02d}"
-            self.overlays.show("ch", f"CH {channel_number}", (0, 255, 0, 255), duration=INDICATOR_DURATION_S)
+            self.overlays.show("ch", f"CH {channel_number}", (0, 255, 0, 255), duration=CH_INDICATOR_DURATION_S)
 
     def change_channel(self, step):
         self.channel_index = (self.channel_index + step) % len(self.channels)
@@ -72,6 +78,14 @@ class PlaybackController:
         label = "< SKIP" if step < 0 else "SKIP >"
         name = "skip_left" if step < 0 else "skip_right"
         self.overlays.show(name, label, (0, 255, 0, 255), duration=INDICATOR_DURATION_S)
+        self._load_current(show_channel_indicator=False)
+
+    def _advance_to_next_program(self):
+        """Natural continuation to the next program in the same channel --
+        no SKIP overlay (that's reserved for the user actually pressing
+        LEFT/RIGHT), since this should read as one continuous channel."""
+        count = len(self._channel()["programs"])
+        self.program_index = (self.program_index + 1) % count
         self._load_current(show_channel_indicator=False)
 
     def toggle_pause(self):
@@ -97,7 +111,7 @@ class PlaybackController:
     def handle_end_of_file(self):
         """Called when mpv reports end-file with reason 'eof' (natural end,
         not a user-initiated load/stop) -- advance like a continuing channel."""
-        self.change_program(1)
+        self._advance_to_next_program()
 
     def stop(self):
         self.overlays.hide_all()

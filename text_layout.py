@@ -40,6 +40,31 @@ def truncate_on_space(font, text, max_width):
     return cut[:last_space] if last_space > 0 else cut
 
 
+def wrap_title_first_line(font, text, max_width):
+    """Greedy word-wrap of just the FIRST line, returning (line, remainder).
+    remainder is None if the whole text fit on one line. Used by the Main
+    Title panel's 3-line layout: ARTIST / TITLE (first line) / rest-of-title
+    + TRT (only when the title didn't fit on one line)."""
+    if font.size(text)[0] <= max_width:
+        return text, None
+    words = text.split(" ")
+    line = ""
+    i = 0
+    while i < len(words):
+        candidate = f"{line} {words[i]}".strip()
+        if font.size(candidate)[0] <= max_width:
+            line = candidate
+            i += 1
+        else:
+            break
+    if not line:
+        # A single word wider than the whole line -- hard-truncate it.
+        line = truncate_hard(font, words[0], max_width)
+        i = 1
+    remainder = " ".join(words[i:])
+    return line, (remainder or None)
+
+
 def wrap_on_space(font, text, max_width, max_lines=2):
     """Greedy word-wrap on spaces into at most max_lines, each fitting
     max_width. Any words left over after max_lines are folded onto the

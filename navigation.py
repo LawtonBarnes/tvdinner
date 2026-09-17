@@ -123,6 +123,16 @@ class NavigationState:
         program_index = (start + offset) % count
         return channel_index, program_index
 
+    def sync_to(self, channel_index, program_index):
+        """Re-point the highlight at an absolute (channel_index, program_index)
+        -- used when returning from playback, so the guide highlight lands on
+        whatever was actually playing (which may have drifted from the guide's
+        own cursor via channel/program changes made while in playback mode)."""
+        offset_in_window = self.highlight_row - TOP_ROW
+        self.channel_scroll_offset = (channel_index - offset_in_window) % self._channel_count()
+        self.highlight_col = "B"
+        self.channel_window_start[channel_index] = program_index
+
     def focused_program(self):
         channel_index = self._current_channel_index()
         channel = self.channels[channel_index]

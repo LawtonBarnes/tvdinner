@@ -19,8 +19,15 @@ def parse_channel_folder(folder_name):
 
 
 def format_channel_number(number):
-    """Always 2-digit for display, regardless of on-disk zero-padding."""
+    """Always 2-digit for display, regardless of on-disk zero-padding.
+    Used for the green CH indicator during playback."""
     return f"{number:02d}"
+
+
+def format_channel_number_guide(number):
+    """No leading zero for single-digit channels in the guide's column A --
+    just the bare number, centered over the 4-char callsign below it."""
+    return str(number)
 
 
 def underscores_to_spaces(text):

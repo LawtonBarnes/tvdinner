@@ -10,8 +10,8 @@ import os
 import pygame
 
 import layout
-from parsing import format_channel_number, format_duration
-from text_layout import truncate_hard, wrap_on_space
+from parsing import format_channel_number_guide, format_duration
+from text_layout import truncate_hard, truncate_on_space, wrap_title_first_line
 
 WHITE = (255, 255, 255)
 YELLOW = (255, 255, 0)
@@ -42,13 +42,14 @@ def draw_channel_column(surface, font, channels):
     """channels: list of 4 dicts (top-to-bottom) with 'number'/'callsign', for VISIBLE_CHANNEL_ROWS."""
     for row, channel in zip(layout.VISIBLE_CHANNEL_ROWS, channels):
         x, y, w, h = layout.cell_rect("A", row)
-        number_text = format_channel_number(channel["number"])
+        number_text = format_channel_number_guide(channel["number"])
         callsign_text = channel["callsign"]
         line_h = font.get_height()
         total_h = line_h * 2
         start_y = y + (h - total_h) // 2
-        draw_text_centered(surface, font, number_text, YELLOW, x + w // 2, start_y)
-        draw_text_centered(surface, font, callsign_text, YELLOW, x + w // 2, start_y + line_h)
+        center_x = x + w // 2 + layout.COLUMN_A_TEXT_OFFSET_X
+        draw_text_centered(surface, font, number_text, YELLOW, center_x, start_y)
+        draw_text_centered(surface, font, callsign_text, YELLOW, center_x, start_y + line_h)
 
 
 def draw_program_grid(surface, font, channels):
@@ -76,15 +77,29 @@ def draw_highlight(surface, col, row):
 
 
 def draw_main_title(surface, font, artist, title, duration_seconds):
+    """3 lines, always: ARTIST / TITLE / TRT. If the title doesn't fit on
+    its own line, it wraps to line 3 instead, with the TRT appended to the
+    end of it as "...WORDS - TRT" -- the title never gets its own 4th line."""
     zone_x, zone_y, zone_w, zone_h = layout.TITLE_ZONE
     center_x = zone_x + zone_w // 2
     line_h = font.get_height()
 
     artist_line = truncate_hard(font, artist, zone_w)
-    title_lines = wrap_on_space(font, title, zone_w, max_lines=2)
+    title_line, remainder = wrap_title_first_line(font, title, zone_w)
     duration_line = format_duration(duration_seconds)
 
-    lines = [artist_line] + title_lines + [duration_line]
+    if remainder:
+        # Reserve room for " - TRT" first, then fit as much of the leftover
+        # title text as possible -- the TRT itself must never get truncated
+        # away just because the leftover title text ran long.
+        suffix = f" - {duration_line}"
+        remainder_max_width = max(zone_w - font.size(suffix)[0], 0)
+        remainder_fit = truncate_on_space(font, remainder, remainder_max_width)
+        third_line = f"{remainder_fit}{suffix}" if remainder_fit else duration_line
+    else:
+        third_line = duration_line
+
+    lines = [artist_line, title_line, third_line]
     for i, line in enumerate(lines):
         draw_text_centered(surface, font, line, WHITE, center_x, zone_y + i * line_h)
 
