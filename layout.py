@@ -44,7 +44,7 @@ HIGHLIGHTABLE_ROWS = (2, 3, 4)  # confirmed by user: highlight never reaches row
 # canvas (x=-4). NTSC-safe-title margin for cheap/overscanning CRTs means
 # the text itself needs to sit further right than the cell's own center --
 # this nudges just the drawn text, not the cell geometry.
-COLUMN_A_TEXT_OFFSET_X = 16
+COLUMN_A_TEXT_OFFSET_X = 26
 
 
 def cell_rect(col, row):
