@@ -90,6 +90,17 @@ class MpvController:
     def set_mute(self, muted):
         self._send(["set_property", "mute", muted])
 
+    def set_audio_gain(self, db):
+        """Static per-file gain compensation (from the indexer's volumedetect
+        pass) -- not a live/dynamic auto-leveler, just a fixed dB boost
+        decided once at load time. 0 (or near enough) clears the filter
+        entirely rather than inserting a harmless-but-pointless unity-gain
+        one."""
+        if abs(db) > 0.05:
+            self._send(["af", "set", f"volume=volume={db:.1f}dB"])
+        else:
+            self._send(["af", "clear"])
+
     def quit(self):
         self._send(["quit"])
 

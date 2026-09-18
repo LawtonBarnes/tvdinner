@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from parsing import parse_channel_folder, parse_media_filename
 
@@ -99,15 +100,45 @@ def load_existing_index(cache_dir):
     return by_path
 
 
-def build_index(media_root, cache_dir):
+def _write_index(cache_dir, media_root, channels):
+    index = {"media_root": media_root, "channels": sorted(channels, key=lambda c: c["number"])}
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp_path = os.path.join(cache_dir, INDEX_FILENAME + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2)
+    os.replace(tmp_path, os.path.join(cache_dir, INDEX_FILENAME))  # atomic swap
+    return index
+
+
+def build_index(media_root, cache_dir, force=False):
     thumb_dir = os.path.join(cache_dir, "thumbnails")
-    existing = load_existing_index(cache_dir)
+    existing = {} if force else load_existing_index(cache_dir)
     channels = []
     skipped = []
 
-    for entry in sorted(os.scandir(media_root), key=lambda e: e.name):
-        if not entry.is_dir():
+    channel_entries = [e for e in sorted(os.scandir(media_root), key=lambda e: e.name) if e.is_dir()]
+
+    # Pre-scan just to get an accurate total for progress reporting -- a
+    # full force run redoes ffprobe+ffmpeg+volumedetect per file, taking the
+    # better part of an hour on this hardware, so an "is it hung?" progress
+    # line matters a lot more than it did for the lightweight cached-reuse case.
+    total_files = 0
+    for entry in channel_entries:
+        try:
+            parse_channel_folder(entry.name)
+        except ValueError:
             continue
+        total_files += sum(
+            1 for f in os.scandir(entry.path) if f.is_file() and f.name.lower().endswith(VIDEO_EXT)
+        )
+    print(f"Found {len(channel_entries)} channel folders, {total_files} video files. "
+          f"{'Forcing full re-probe (ignoring cache).' if force else 'Reusing cached entries where mtime matches.'}",
+          flush=True)
+
+    start_time = time.monotonic()
+    done_files = 0
+
+    for entry in channel_entries:
         try:
             number, callsign = parse_channel_folder(entry.name)
         except ValueError as e:
@@ -133,6 +164,7 @@ def build_index(media_root, cache_dir):
             cached = existing.get(relpath)
             if cached and cached.get("mtime") == mtime:
                 programs.append(cached)
+                done_files += 1
                 continue
 
             video_path = f.path
@@ -168,6 +200,13 @@ def build_index(media_root, cache_dir):
                 "mean_volume_db": mean_volume_db,
             })
 
+            done_files += 1
+            elapsed = time.monotonic() - start_time
+            rate = elapsed / done_files
+            remaining = rate * (total_files - done_files)
+            print(f"[{done_files}/{total_files}] {relpath} "
+                  f"({elapsed / 60:.1f}m elapsed, ~{remaining / 60:.1f}m remaining)", flush=True)
+
         channels.append({
             "number": number,
             "callsign": callsign,
@@ -175,13 +214,11 @@ def build_index(media_root, cache_dir):
             "programs": programs,
         })
 
-    channels.sort(key=lambda c: c["number"])
-    index = {"media_root": media_root, "channels": channels}
+        # Checkpoint after each channel -- a multi-hour unattended run
+        # shouldn't lose everything if it's interrupted partway through.
+        _write_index(cache_dir, media_root, channels)
 
-    os.makedirs(cache_dir, exist_ok=True)
-    with open(os.path.join(cache_dir, INDEX_FILENAME), "w", encoding="utf-8") as f:
-        json.dump(index, f, indent=2)
-
+    index = _write_index(cache_dir, media_root, channels)
     return index, skipped
 
 
@@ -189,12 +226,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--media", required=True, help="Path to the mounted media drive")
     parser.add_argument("--cache", required=True, help="Path to the writable cache directory")
+    parser.add_argument("--force", action="store_true",
+                         help="Ignore cached mtime matches and re-probe every file "
+                              "(e.g. after adding a new probed field like volumedetect)")
     args = parser.parse_args()
 
-    index, skipped = build_index(args.media, args.cache)
+    start_time = time.monotonic()
+    index, skipped = build_index(args.media, args.cache, force=args.force)
 
     total_programs = sum(len(c["programs"]) for c in index["channels"])
-    print(f"Indexed {len(index['channels'])} channels, {total_programs} programs.")
+    elapsed_min = (time.monotonic() - start_time) / 60
+    print(f"Indexed {len(index['channels'])} channels, {total_programs} programs in {elapsed_min:.1f} minutes.")
     if skipped:
         print(f"\n{len(skipped)} skipped/failed:", file=sys.stderr)
         for line in skipped:

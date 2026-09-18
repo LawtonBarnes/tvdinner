@@ -28,10 +28,33 @@ own NavigationState -- selecting OK on a highlighted program starts
 playback there, but panning through channels via remote while *playing*
 doesn't retroactively move the guide's own cursor (matches the mental
 model: the guide is where you browse, playback is where you watch).
+
+**Per-file gain compensation (2026-09-17):** the indexer's volumedetect
+pass measured wildly inconsistent peak levels across the library (these
+are YouTube rips, not a mastered source) -- 37% of files already sit at
+0 dB peak (zero headroom) while the quietest is over 20 dB below that.
+_load_current() applies a static, boost-only gain per file so quiet
+tracks get turned up to roughly match the loud ones -- this is NOT a
+live/dynamic auto-leveler (the user was explicit about not wanting
+that): the gain is computed once from the indexer's stored peak value
+and set as a fixed mpv audio filter for that file's entire playback,
+identical in spirit to the fleet's line-level-PCM-enforced convention
+elsewhere ([[project_bars]]/[[project_mcbrain]]) -- a fixed level
+decided in advance, not something that reacts to the audio as it plays.
 """
 
 INDICATOR_DURATION_S = 2.0
 CH_INDICATOR_DURATION_S = INDICATOR_DURATION_S * 2  # CH indicator stays up ~double as long (user request)
+
+# Boost-only gain compensation target -- see the module docstring. Tracks
+# already at or above this peak get zero adjustment (nothing to gain, and
+# never attenuated); quieter ones get turned up toward it.
+TARGET_PEAK_DB = -1.0
+# Safety ceiling on the computed boost itself, independent of the target
+# above -- guards against a bad/corrupt peak_volume_db value ever producing
+# an absurd gain. The real library's worst case (Megadeth - Symphony Of
+# Destruction) only needs +20.3dB, comfortably under this.
+MAX_GAIN_DB = 24.0
 
 
 class PlaybackController:
@@ -51,6 +74,12 @@ class PlaybackController:
     def _media_path(self, media_root, program):
         return f"{media_root}/{program['relpath']}"
 
+    def _gain_for(self, program):
+        peak = program.get("peak_volume_db")
+        if peak is None:
+            return 0.0  # no measurement (old cache entry, or a failed probe) -- leave it alone
+        return min(MAX_GAIN_DB, max(0.0, TARGET_PEAK_DB - peak))
+
     def start(self, media_root, channel_index, program_index):
         self.media_root = media_root
         self.channel_index = channel_index
@@ -60,6 +89,7 @@ class PlaybackController:
 
     def _load_current(self, show_channel_indicator=False):
         program = self._program()
+        self.mpv.set_audio_gain(self._gain_for(program))
         self.mpv.load_file(self._media_path(self.media_root, program))
         self.mpv.set_pause(False)
         self.overlays.hide("pause")
