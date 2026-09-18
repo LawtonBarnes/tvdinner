@@ -29,7 +29,7 @@ from overlay import OverlayManager, OverlayRenderer
 from parsing import format_clock_12h, format_duration
 from player import PlaybackController
 
-VERSION = "0.1"
+VERSION = "1.0"
 
 MEDIA_ROOT = "/mnt/tvdinner"
 CACHE_DIR = "/opt/tvdinner-cache"
