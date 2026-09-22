@@ -29,7 +29,7 @@ from overlay import OverlayManager, OverlayRenderer
 from parsing import format_clock_12h, format_duration
 from player import PlaybackController
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 MEDIA_ROOT = "/mnt/tvdinner"
 CACHE_DIR = "/opt/tvdinner-cache"
@@ -42,6 +42,64 @@ PLAYBACK_SELECT_TIMEOUT_S = 0.2
 OK_CODES = (ecodes.KEY_ENTER, ecodes.KEY_KPENTER, ecodes.BTN_LEFT, ecodes.BTN_MOUSE)
 BACK_CODES = (ecodes.KEY_Q, ecodes.KEY_ESC, ecodes.KEY_BACK, ecodes.KEY_COMPOSE)
 HOME_CODES = (ecodes.KEY_HOMEPAGE, ecodes.KEY_HOME)
+
+LOGO_PATH = os.path.join(ASSET_DIR, "metalshop-logo.png")  # ABOUT screen -- see draw_about_screen()
+BLACK = (0, 0, 0)
+WHITE = (0xFF, 0xFF, 0xFF)
+ORANGE = (0xFF, 0xA5, 0x00)
+
+# ABOUT screen (2026-09-22, fleet-wide -- same layout in every app except
+# WX, duplicated per this codebase's no-shared-library convention). BACK
+# toggles it from the app's home level. Title top center, settings in the
+# middle, METAL SHOP logo bottom center. The logo is square-pixel art, so
+# it's stretched horizontally by 720/640 to look right on the CRT's
+# narrower-than-square 720x480 pixels.
+ABOUT_MARGIN_Y = 48  # keeps title/logo inside the CRT's visible area
+ABOUT_LINE_GAP = 8
+ABOUT_COLUMN_GAP = 16
+LOGO_X_STRETCH = 720 / 640
+
+
+def load_about_logo():
+    try:
+        img = pygame.image.load(LOGO_PATH).convert_alpha()
+    except (pygame.error, OSError) as exc:
+        print(f"Logo load failed: {exc}", file=sys.stderr)
+        return None
+    w, h = img.get_size()
+    return pygame.transform.smoothscale(img, (round(w * LOGO_X_STRETCH), h))
+
+
+def draw_about_screen(canvas, title_font, body_font, logo, title, rows):
+    """`rows` is a list of (label, value) -- labels right-aligned in an
+    orange column, values left-aligned in white beside them, the block
+    centered in the space between the title and the logo. A row with an
+    empty label continues the previous row's value column."""
+    frame_w, frame_h = canvas.get_size()
+    canvas.fill(BLACK)
+    title_surf = title_font.render(title, True, ORANGE)
+    canvas.blit(title_surf, ((frame_w - title_surf.get_width()) // 2, ABOUT_MARGIN_Y))
+    top = ABOUT_MARGIN_Y + title_surf.get_height()
+    bottom = frame_h - ABOUT_MARGIN_Y
+    if logo is not None:
+        bottom -= logo.get_height()
+        canvas.blit(logo, ((frame_w - logo.get_width()) // 2, bottom))
+    if not rows:
+        return
+    label_surfs = [body_font.render(label, True, ORANGE) if label else None for label, _ in rows]
+    value_surfs = [body_font.render(str(value), True, WHITE) for _, value in rows]
+    label_w = max((l.get_width() for l in label_surfs if l), default=0)
+    value_w = max(v.get_width() for v in value_surfs)
+    line_h = body_font.get_linesize() + ABOUT_LINE_GAP
+    x0 = (frame_w - (label_w + ABOUT_COLUMN_GAP + value_w)) // 2
+    y = top + (bottom - top - line_h * len(rows)) // 2
+    for label_surf, value_surf in zip(label_surfs, value_surfs):
+        if label_surf:
+            canvas.blit(label_surf, (x0 + label_w - label_surf.get_width(), y))
+        canvas.blit(value_surf, (x0 + label_w + ABOUT_COLUMN_GAP, y))
+        y += line_h
+
+
 
 
 def find_keyboard_devices():
@@ -80,6 +138,12 @@ class TvDinnerApp:
         self.player = None
         self.pending_exit_code = 0
 
+        about_font_path = os.path.join(ASSET_DIR, "VCR_OSD_MONO_1.001.ttf")
+        self.about_title_font = pygame.font.Font(about_font_path, 36)
+        self.about_body_font = pygame.font.Font(about_font_path, 26)
+        self.about_logo = load_about_logo()
+        self.about_active = False
+
     # -- guide rendering -----------------------------------------------------
 
     def _thumbnail_surface(self, program):
@@ -90,6 +154,15 @@ class TvDinnerApp:
             except pygame.error:
                 pass
         return self.no_thumb
+
+    def render_about(self):
+        draw_about_screen(self.surface, self.about_title_font, self.about_body_font, self.about_logo,
+                          f"TV DINNER {VERSION}", [
+                              ("MEDIA", MEDIA_ROOT),
+                              ("CHANNELS", len(self.channels)),
+                              ("PROGRAMS", sum(len(ch["programs"]) for ch in self.channels)),
+                          ])
+        self.fb.write_surface(self.surface)
 
     def render_guide(self):
         focused = self.nav.focused_program()
@@ -129,6 +202,19 @@ class TvDinnerApp:
     # -- input handling ----------------------------------------------------
 
     def handle_guide_keycode(self, code):
+        # BACK toggles the fleet-wide ABOUT screen from the guide (TV
+        # DINNER's home level) -- 2026-09-22, replacing BACK-plays-the-
+        # highlighted-program (OK still does that). ABOUT is modal: only
+        # BACK (and Home, handled in handle_keycode) do anything there.
+        if code == ecodes.KEY_BACK:
+            self.about_active = not self.about_active
+            if self.about_active:
+                self.render_about()
+            else:
+                self.render_guide()
+            return
+        if self.about_active:
+            return
         if code == ecodes.KEY_UP:
             self.nav.handle_up()
         elif code == ecodes.KEY_DOWN:
@@ -138,8 +224,9 @@ class TvDinnerApp:
         elif code == ecodes.KEY_RIGHT:
             self.nav.handle_right()
         elif code in OK_CODES or code in BACK_CODES:
-            # BACK from the guide plays the currently highlighted program,
-            # same as OK -- BACK no longer quits/relaunches the app here.
+            # Q/Esc/hamburger from the guide play the highlighted program,
+            # same as OK -- they never quit/relaunch the app here. (BACK
+            # itself is caught above for ABOUT.)
             self.enter_playback()
             return
         else:
