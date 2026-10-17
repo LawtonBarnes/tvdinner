@@ -36,7 +36,19 @@ import time
 
 import numpy as np
 
-FONT_FILE = "/usr/share/consolefonts/Lat15-VGA8.psf.gz"
+FONT_DIR = "/usr/share/consolefonts"
+DEFAULT_FONT = "Lat15-VGA8"
+
+
+def font_path(name):
+    """settings.ini ascii_font: a console font name (e.g. Lat15-VGA14,
+    looked up in FONT_DIR) or a full path to a .psf/.psf.gz file."""
+    if os.sep in name:
+        return name
+    return os.path.join(FONT_DIR, name if name.endswith((".psf", ".psf.gz")) else name + ".psf.gz")
+
+
+FONT_FILE = font_path(DEFAULT_FONT)
 FPS = 30
 QUEUE_FRAMES = 8
 # Brightness below this (0-255) is drawn as empty black, so dark areas of

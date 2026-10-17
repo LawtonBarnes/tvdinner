@@ -29,7 +29,7 @@ from navigation import NavigationState
 from overlay import OverlayManager, OverlayRenderer
 from parsing import format_clock_12h, format_duration
 from player import PlaybackController
-from ascii_video import AsciiVideo
+from ascii_video import AsciiVideo, font_path
 
 VERSION = "1.2"
 
@@ -127,6 +127,7 @@ def load_settings(path=SETTINGS_PATH):
     return {
         "ascii_mode": cp.getboolean("playback", "ascii_mode", fallback=False),
         "ascii_saturation": cp.getfloat("playback", "ascii_saturation", fallback=3.0),
+        "ascii_font": cp.get("playback", "ascii_font", fallback="Lat15-VGA8"),
     }
 
 
@@ -167,7 +168,8 @@ class TvDinnerApp:
         self.ascii_video = None
         if self.settings["ascii_mode"]:
             try:
-                self.ascii_video = AsciiVideo(self.fb, saturation=self.settings["ascii_saturation"])
+                self.ascii_video = AsciiVideo(self.fb, font_path=font_path(self.settings["ascii_font"]),
+                                              saturation=self.settings["ascii_saturation"])
             except (OSError, ValueError) as exc:
                 print(f"ASCII mode unavailable, playing normal video: {exc}", file=sys.stderr)
 
