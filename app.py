@@ -126,6 +126,7 @@ def load_settings(path=SETTINGS_PATH):
     cp.read(path)
     return {
         "ascii_mode": cp.getboolean("playback", "ascii_mode", fallback=False),
+        "ascii_saturation": cp.getfloat("playback", "ascii_saturation", fallback=3.0),
     }
 
 
@@ -166,7 +167,7 @@ class TvDinnerApp:
         self.ascii_video = None
         if self.settings["ascii_mode"]:
             try:
-                self.ascii_video = AsciiVideo(self.fb)
+                self.ascii_video = AsciiVideo(self.fb, saturation=self.settings["ascii_saturation"])
             except (OSError, ValueError) as exc:
                 print(f"ASCII mode unavailable, playing normal video: {exc}", file=sys.stderr)
 

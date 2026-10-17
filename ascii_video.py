@@ -42,6 +42,12 @@ QUEUE_FRAMES = 8
 # Brightness below this (0-255) is drawn as empty black, so dark areas of
 # the picture really go black instead of a field of dots.
 BLACK_LEVEL = 24
+# Default color boost (settings.ini ascii_saturation): how hard each
+# character's tint is pushed from white toward its pure hue. Smoky, stage-lit
+# SD music videos are mostly pale tints, and composite video mutes those
+# further -- at 1.0 the wall read as "nearly monochrome" (user, 2026-10-16).
+DEFAULT_SATURATION = 3.0
+
 # The overlay coordinates/sizes in overlay.py are for the 720x480 frame
 # mpv normally fills; scale them to whatever this framebuffer is.
 OVERLAY_SPACE = (720, 480)
@@ -118,10 +124,11 @@ def _build_ramp(bits, mapping, levels=20):
 
 
 class AsciiVideo:
-    def __init__(self, fb, font_path=FONT_FILE):
+    def __init__(self, fb, font_path=FONT_FILE, saturation=DEFAULT_SATURATION):
         if shutil.which("ffmpeg") is None:
             raise OSError("ffmpeg not installed")
         self.fb = fb
+        self.saturation = max(0.0, float(saturation))
         bits, mapping = _load_psf(font_path)
         self.chars, glyphs = _build_ramp(bits, mapping)
         self.cell_h, self.cell_w = glyphs.shape[1:]
@@ -245,7 +252,10 @@ class AsciiVideo:
         # tint = the cell's hue at full brightness (brightness itself is
         # carried by which character it is)
         peak = np.maximum(rgb.max(axis=2, keepdims=True), 1.0)
-        tint = rgb * (255.0 / peak)
+        tint = rgb * (1.0 / peak)  # 0..1, brightest channel = 1
+        # saturation boost: scale each channel's distance below full by the
+        # gain, so pale tints head toward their pure hue (grays stay white)
+        tint = np.clip(1.0 - (1.0 - tint) * self.saturation, 0.0, 1.0) * 255.0
         r = tint[:, :, 0].astype(np.uint16) >> 3
         g = tint[:, :, 1].astype(np.uint16) >> 2
         b = tint[:, :, 2].astype(np.uint16) >> 3
