@@ -58,9 +58,12 @@ MAX_GAIN_DB = 24.0
 
 
 class PlaybackController:
-    def __init__(self, mpv, overlays, channels):
+    def __init__(self, mpv, overlays, channels, video=None):
         self.mpv = mpv
         self.overlays = overlays
+        # ascii_video.AsciiVideo in ASCII mode (mpv then plays audio only and
+        # this draws the picture), None for normal mpv video playback
+        self.video = video
         self.channels = channels  # shared reference to the same channel list the guide uses
         self.channel_index = 0
         self.program_index = 0
@@ -92,6 +95,10 @@ class PlaybackController:
         self.mpv.set_audio_gain(self._gain_for(program))
         self.mpv.load_file(self._media_path(self.media_root, program))
         self.mpv.set_pause(False)
+        self._paused = False
+        if self.video is not None:
+            self.video.set_paused(False)
+            self.video.start(self._media_path(self.media_root, program))
         self.overlays.hide("pause")
         if show_channel_indicator:
             channel_number = f"{self._channel()['number']:02d}"
@@ -123,6 +130,8 @@ class PlaybackController:
         # forget IPC, no request/response round trip needed for this).
         self._paused = not getattr(self, "_paused", False)
         self.mpv.set_pause(self._paused)
+        if self.video is not None:
+            self.video.set_paused(self._paused)
         if self._paused:
             self.overlays.show("pause", "PAUSE", (255, 0, 0, 255), duration=None)
         else:
@@ -145,4 +154,6 @@ class PlaybackController:
 
     def stop(self):
         self.overlays.hide_all()
+        if self.video is not None:
+            self.video.stop()
         self.mpv.close()

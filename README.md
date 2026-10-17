@@ -76,6 +76,30 @@ either convention ever needs to change.
   `overlay-add` command.
 - `app.py` ties it together behind one evdev-driven event loop -- the only
   thing reading the remote -- and owns the guide/playback mode switch.
+- `ascii_video.py` is the optional ASCII mode (below).
+
+## ASCII mode
+
+Plays video as colored text characters on black instead of normal video
+-- built for a 2x2 CRT video wall fed at XGA (1024x768), where the Linux
+console's 8x8 VGA font gives a 128x96 character grid, 64x48 per tube: a
+soft SD source becomes crisp lettering. Turn it on per machine in
+`settings.ini` (copy `settings.example.ini`):
+
+    [playback]
+    ascii_mode = yes
+
+mpv plays only the audio (same gain compensation, pause, mute and
+auto-advance as normal), and reports its playback clock; ffmpeg decodes the
+video straight down to one pixel per character cell; each cell's brightness
+picks a character from a density ramp built from the font itself, tinted
+with the cell's own color at full brightness; the whole frame is composed
+in numpy from a glyph atlas and written to `/dev/fb0`. Runs at ~27 fps on
+a Pi 3B+ at 1024x768. The playback indicators are drawn into the text frame
+in place of mpv's `overlay-add`. Needs `ffmpeg` and the console font
+`/usr/share/consolefonts/Lat15-VGA8.psf.gz` (both standard on Raspberry Pi
+OS); if either is missing it falls back to normal video. The ABOUT screen
+shows whether it's on.
 
 ## Drive mounts
 

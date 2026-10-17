@@ -63,6 +63,26 @@ class FrameBuffer:
                 self.mm.seek(y * self.stride)
                 self.mm.write(raw[y * self.row_bytes : (y + 1) * self.row_bytes])
 
+    def write_raw565(self, frame):
+        """Writes an already-composed (height, width) RGB565 uint16 frame
+        (ASCII mode, ascii_video.py) -- converted only if the framebuffer
+        isn't 16bpp."""
+        if self.bpp == 16:
+            raw = frame.astype("<u2", copy=False).tobytes()
+        else:
+            f = frame.astype(np.uint32)
+            r = ((f >> 11) & 0x1F) * 255 // 31
+            g = ((f >> 5) & 0x3F) * 255 // 63
+            b = (f & 0x1F) * 255 // 31
+            raw = (b | (g << 8) | (r << 16)).astype("<u4").tobytes()
+        if self.stride == self.row_bytes:
+            self.mm.seek(0)
+            self.mm.write(raw)
+        else:
+            for y in range(self.height):
+                self.mm.seek(y * self.stride)
+                self.mm.write(raw[y * self.row_bytes : (y + 1) * self.row_bytes])
+
     def fill_black(self):
         """Paints the whole framebuffer black. Used once when entering
         playback mode: mpv's --vo=drm takes real DRM master directly, but if

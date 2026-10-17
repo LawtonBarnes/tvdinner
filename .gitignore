@@ -6,3 +6,6 @@ nav_demo_frames/
 run_app_debug.py
 simulate_remote.py
 real_index_render.png
+
+# Per-machine settings -- each host keeps its own; see settings.example.ini
+settings.ini

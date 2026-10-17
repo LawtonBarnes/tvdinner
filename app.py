@@ -8,6 +8,7 @@ real DRM master only while a video is actually playing -- the two never
 run at once.
 """
 
+import configparser
 import datetime
 import os
 import selectors
@@ -28,6 +29,7 @@ from navigation import NavigationState
 from overlay import OverlayManager, OverlayRenderer
 from parsing import format_clock_12h, format_duration
 from player import PlaybackController
+from ascii_video import AsciiVideo
 
 VERSION = "1.2"
 
@@ -36,8 +38,12 @@ CACHE_DIR = "/opt/tvdinner-cache"
 INDEX_PATH = os.path.join(CACHE_DIR, "index.json")
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 
+SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.ini")
 GUIDE_SELECT_TIMEOUT_S = 1.0
 PLAYBACK_SELECT_TIMEOUT_S = 0.2
+# ASCII mode draws its own frames, so the loop has to come around far more
+# often than the 0.2s that's plenty for overlay timeouts.
+ASCII_SELECT_TIMEOUT_S = 0.005
 
 OK_CODES = (ecodes.KEY_ENTER, ecodes.KEY_KPENTER, ecodes.BTN_LEFT, ecodes.BTN_MOUSE)
 BACK_CODES = (ecodes.KEY_Q, ecodes.KEY_ESC, ecodes.KEY_BACK, ecodes.KEY_COMPOSE)
@@ -113,8 +119,19 @@ def find_keyboard_devices():
     return devices
 
 
+def load_settings(path=SETTINGS_PATH):
+    """settings.ini is per machine and untracked (see settings.example.ini);
+    missing file or keys fall back to these defaults."""
+    cp = configparser.ConfigParser()
+    cp.read(path)
+    return {
+        "ascii_mode": cp.getboolean("playback", "ascii_mode", fallback=False),
+    }
+
+
 class TvDinnerApp:
     def __init__(self):
+        self.settings = load_settings()
         channels = load_index(INDEX_PATH)
         self.channels = channels
         self.nav = NavigationState(channels)
@@ -144,6 +161,15 @@ class TvDinnerApp:
         self.about_logo = load_about_logo()
         self.about_active = False
 
+        # ASCII mode (settings.ini) -- falls back to normal video if its
+        # font or ffmpeg can't be set up on this machine.
+        self.ascii_video = None
+        if self.settings["ascii_mode"]:
+            try:
+                self.ascii_video = AsciiVideo(self.fb)
+            except (OSError, ValueError) as exc:
+                print(f"ASCII mode unavailable, playing normal video: {exc}", file=sys.stderr)
+
     # -- guide rendering -----------------------------------------------------
 
     def _thumbnail_surface(self, program):
@@ -161,6 +187,7 @@ class TvDinnerApp:
                               ("MEDIA", MEDIA_ROOT),
                               ("CHANNELS", len(self.channels)),
                               ("PROGRAMS", sum(len(ch["programs"]) for ch in self.channels)),
+                              ("ASCII MODE", "ON" if self.ascii_video else "OFF"),
                           ])
         self.fb.write_surface(self.surface)
 
@@ -184,9 +211,11 @@ class TvDinnerApp:
     def enter_playback(self):
         channel_index, program_index = self.nav.current_indices()
         self.fb.fill_black()  # nothing stale left over for a DRM-master hiccup to expose
-        mpv = MpvController()
-        overlays = OverlayManager(mpv, self.overlay_renderer)
-        self.player = PlaybackController(mpv, overlays, self.channels)
+        mpv = MpvController(audio_only=self.ascii_video is not None)
+        # In ASCII mode the indicators are drawn by AsciiVideo, which takes
+        # mpv's overlay-add calls in its place.
+        overlays = OverlayManager(self.ascii_video or mpv, self.overlay_renderer)
+        self.player = PlaybackController(mpv, overlays, self.channels, video=self.ascii_video)
         self.player.start(MEDIA_ROOT, channel_index, program_index)
         self.selector.register(mpv.fileno(), selectors.EVENT_READ, data="mpv")
         self.mode = "playback"
@@ -268,7 +297,12 @@ class TvDinnerApp:
         running = True
         try:
             while running:
-                timeout = PLAYBACK_SELECT_TIMEOUT_S if self.mode == "playback" else GUIDE_SELECT_TIMEOUT_S
+                if self.mode != "playback":
+                    timeout = GUIDE_SELECT_TIMEOUT_S
+                elif self.player and self.player.video is not None:
+                    timeout = ASCII_SELECT_TIMEOUT_S
+                else:
+                    timeout = PLAYBACK_SELECT_TIMEOUT_S
                 for key, _ in self.selector.select(timeout=timeout):
                     if key.data == "input":
                         try:
@@ -290,11 +324,16 @@ class TvDinnerApp:
                         for event in self.player.mpv.read_events():
                             if event.get("event") == "end-file" and event.get("reason") == "eof":
                                 self.player.handle_end_of_file()
+                            elif (event.get("event") == "property-change" and event.get("name") == "time-pos"
+                                  and self.player.video is not None):
+                                self.player.video.set_time(event.get("data"))
                     if not running:
                         break
 
                 if self.mode == "playback" and self.player:
                     self.player.overlays.update()
+                    if self.player.video is not None:
+                        self.player.video.tick()
                     if not self.player.mpv.is_running():
                         self.exit_playback()
         finally:

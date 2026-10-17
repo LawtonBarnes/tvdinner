@@ -33,23 +33,39 @@ MPV_ARGS = [
     "--idle=yes",  # stay alive between files instead of exiting, we drive it explicitly
 ]
 
+# ASCII mode (ascii_video.py draws the picture itself): mpv only plays the
+# audio and reports its clock -- no video decode, and it never takes DRM
+# master, so the framebuffer stays ours.
+AUDIO_ONLY_ARGS = [
+    "mpv",
+    "--vid=no",
+    "--vo=null",
+    "--no-osc",
+    "--no-input-default-bindings",
+    "--no-input-terminal",
+    "--idle=yes",
+]
+TIME_POS_OBSERVER_ID = 1
+
 SOCKET_PATH = "/tmp/tvdinner-mpv.sock"
 SOCKET_CONNECT_TIMEOUT_S = 5
 SOCKET_CONNECT_POLL_S = 0.05
 
 
 class MpvController:
-    def __init__(self):
+    def __init__(self, audio_only=False):
+        self.audio_only = audio_only
         self.proc = None
         self.sock = None
         self._next_request_id = 1
         self._pending = {}  # request_id -> None (fire-and-forget; we don't block on replies)
+        self._partial = b""  # an incomplete trailing line from the last recv
 
     def start(self):
         if os.path.exists(SOCKET_PATH):
             os.remove(SOCKET_PATH)
         self.proc = subprocess.Popen(
-            MPV_ARGS + [f"--input-ipc-server={SOCKET_PATH}"],
+            (AUDIO_ONLY_ARGS if self.audio_only else MPV_ARGS) + [f"--input-ipc-server={SOCKET_PATH}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + SOCKET_CONNECT_TIMEOUT_S
@@ -59,6 +75,10 @@ class MpvController:
                     self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     self.sock.connect(SOCKET_PATH)
                     self.sock.setblocking(False)
+                    if self.audio_only:
+                        # time-pos arrives as property-change events -- the
+                        # clock ASCII mode times its frames against
+                        self._send(["observe_property", TIME_POS_OBSERVER_ID, "time-pos"])
                     return
                 except OSError:
                     pass
@@ -122,7 +142,12 @@ class MpvController:
             return events
         if not buf:
             return events
-        for line in buf.decode("utf-8", errors="replace").splitlines():
+        # A message can be split across two reads (more likely now that ASCII
+        # mode observes time-pos, a steady stream of events) -- keep the
+        # unfinished tail for next time instead of dropping it, which could
+        # otherwise lose an end-file event and stall auto-advance.
+        *lines, self._partial = (self._partial + buf).split(b"\n")
+        for line in (raw.decode("utf-8", errors="replace") for raw in lines):
             line = line.strip()
             if not line:
                 continue
