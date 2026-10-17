@@ -31,7 +31,7 @@ from parsing import format_clock_12h, format_duration
 from player import PlaybackController
 from ascii_video import AsciiVideo, font_path
 
-VERSION = "1.2"
+VERSION = "1.3"
 
 MEDIA_ROOT = "/mnt/tvdinner"
 CACHE_DIR = "/opt/tvdinner-cache"
