@@ -59,6 +59,11 @@ BLACK_LEVEL = 24
 # SD music videos are mostly pale tints, and composite video mutes those
 # further -- at 1.0 the wall read as "nearly monochrome" (user, 2026-10-16).
 DEFAULT_SATURATION = 3.0
+# Default leading trim (settings.ini ascii_line_trim): pixel rows cut from
+# each character cell's blank margin above/below the glyphs, so lines of
+# text sit closer together and more of them fit. Never cuts lit pixels,
+# and always leaves at least 1 black row between lines.
+DEFAULT_LINE_TRIM = 0
 
 # The overlay coordinates/sizes in overlay.py are for the 720x480 frame
 # mpv normally fills; scale them to whatever this framebuffer is.
@@ -135,14 +140,29 @@ def _build_ramp(bits, mapping, levels=20):
     return " " + "".join(ch for _, ch, _ in chosen), glyphs
 
 
+def _trim_leading(glyphs, trim):
+    """Cut up to `trim` blank pixel rows from the ramp's cells, alternating
+    bottom/top, keeping at least 1 blank row between lines of text."""
+    lit = np.flatnonzero(glyphs.any(axis=(0, 2)))
+    if len(lit) == 0:
+        return glyphs
+    top, bottom = lit[0], glyphs.shape[1] - 1 - lit[-1]
+    trim = max(0, min(int(trim), top + bottom - 1))
+    cut_bottom = min(bottom, (trim + 1) // 2)
+    cut_top = min(top, trim - cut_bottom)
+    cut_bottom = trim - cut_top
+    return glyphs[:, cut_top:glyphs.shape[1] - cut_bottom]
+
+
 class AsciiVideo:
-    def __init__(self, fb, font_path=FONT_FILE, saturation=DEFAULT_SATURATION):
+    def __init__(self, fb, font_path=FONT_FILE, saturation=DEFAULT_SATURATION, line_trim=DEFAULT_LINE_TRIM):
         if shutil.which("ffmpeg") is None:
             raise OSError("ffmpeg not installed")
         self.fb = fb
         self.saturation = max(0.0, float(saturation))
         bits, mapping = _load_psf(font_path)
         self.chars, glyphs = _build_ramp(bits, mapping)
+        glyphs = _trim_leading(glyphs, line_trim)
         self.cell_h, self.cell_w = glyphs.shape[1:]
         self.cols = fb.width // self.cell_w
         self.rows = fb.height // self.cell_h

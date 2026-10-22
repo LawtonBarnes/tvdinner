@@ -128,6 +128,7 @@ def load_settings(path=SETTINGS_PATH):
         "ascii_mode": cp.getboolean("playback", "ascii_mode", fallback=False),
         "ascii_saturation": cp.getfloat("playback", "ascii_saturation", fallback=3.0),
         "ascii_font": cp.get("playback", "ascii_font", fallback="Lat15-VGA8"),
+        "ascii_line_trim": cp.getint("playback", "ascii_line_trim", fallback=0),
     }
 
 
@@ -169,7 +170,8 @@ class TvDinnerApp:
         if self.settings["ascii_mode"]:
             try:
                 self.ascii_video = AsciiVideo(self.fb, font_path=font_path(self.settings["ascii_font"]),
-                                              saturation=self.settings["ascii_saturation"])
+                                              saturation=self.settings["ascii_saturation"],
+                                              line_trim=self.settings["ascii_line_trim"])
             except (OSError, ValueError) as exc:
                 print(f"ASCII mode unavailable, playing normal video: {exc}", file=sys.stderr)
 
