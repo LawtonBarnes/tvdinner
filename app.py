@@ -53,6 +53,7 @@ LOGO_PATH = os.path.join(ASSET_DIR, "metalshop-logo.png")  # ABOUT screen -- see
 BLACK = (0, 0, 0)
 WHITE = (0xFF, 0xFF, 0xFF)
 ORANGE = (0xFF, 0xA5, 0x00)
+YELLOW = (0xFF, 0xFF, 0x00)  # ABOUT's changeable value, same yellow as the guide highlight
 
 # ABOUT screen (2026-09-22, fleet-wide -- same layout in every app except
 # WX, duplicated per this codebase's no-shared-library convention). BACK
@@ -76,11 +77,13 @@ def load_about_logo():
     return pygame.transform.smoothscale(img, (round(w * LOGO_X_STRETCH), h))
 
 
-def draw_about_screen(canvas, title_font, body_font, logo, title, rows):
+def draw_about_screen(canvas, title_font, body_font, logo, title, rows, selected=None):
     """`rows` is a list of (label, value) -- labels right-aligned in an
     orange column, values left-aligned in white beside them, the block
     centered in the space between the title and the logo. A row with an
-    empty label continues the previous row's value column."""
+    empty label continues the previous row's value column. Row `selected`
+    (an index, optional) is a setting LEFT/RIGHT can change: its value is
+    drawn in yellow between < > arrows."""
     frame_w, frame_h = canvas.get_size()
     canvas.fill(BLACK)
     title_surf = title_font.render(title, True, ORANGE)
@@ -93,7 +96,9 @@ def draw_about_screen(canvas, title_font, body_font, logo, title, rows):
     if not rows:
         return
     label_surfs = [body_font.render(label, True, ORANGE) if label else None for label, _ in rows]
-    value_surfs = [body_font.render(str(value), True, WHITE) for _, value in rows]
+    value_surfs = [body_font.render(f"< {value} >", True, YELLOW) if i == selected
+                   else body_font.render(str(value), True, WHITE)
+                   for i, (_, value) in enumerate(rows)]
     label_w = max((l.get_width() for l in label_surfs if l), default=0)
     value_w = max(v.get_width() for v in value_surfs)
     line_h = body_font.get_linesize() + ABOUT_LINE_GAP
@@ -132,6 +137,38 @@ def load_settings(path=SETTINGS_PATH):
     }
 
 
+def save_ascii_mode(on, path=SETTINGS_PATH):
+    """Write ascii_mode back to settings.ini so an ABOUT-screen toggle
+    survives a restart. Edits just that one line (or adds it under
+    [playback]) so the file's comments and other keys stay as they are."""
+    line = f"ascii_mode = {'yes' if on else 'no'}\n"
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except OSError:
+        lines = []
+    section = None
+    for i, text in enumerate(lines):
+        stripped = text.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip()
+        elif section == "playback" and stripped.split("=")[0].strip() == "ascii_mode":
+            lines[i] = line
+            break
+    else:
+        for i, text in enumerate(lines):
+            if text.strip() == "[playback]":
+                lines.insert(i + 1, line)
+                break
+        else:
+            lines += (["\n"] if lines else []) + ["[playback]\n", line]
+    try:
+        with open(path, "w") as f:
+            f.writelines(lines)
+    except OSError as exc:
+        print(f"Couldn't save ascii_mode to {path}: {exc}", file=sys.stderr)
+
+
 class TvDinnerApp:
     def __init__(self):
         self.settings = load_settings()
@@ -164,16 +201,27 @@ class TvDinnerApp:
         self.about_logo = load_about_logo()
         self.about_active = False
 
-        # ASCII mode (settings.ini) -- falls back to normal video if its
-        # font or ffmpeg can't be set up on this machine.
+        # ASCII mode (settings.ini, or LEFT/RIGHT on the ABOUT screen) --
+        # stays OFF if its font or ffmpeg can't be set up on this machine.
         self.ascii_video = None
+        self.ascii_on = False
         if self.settings["ascii_mode"]:
+            self.set_ascii_mode(True, save=False)
+
+    def set_ascii_mode(self, on, save=True):
+        """Only called from the guide/ABOUT, never mid-playback -- the
+        next enter_playback() picks it up."""
+        if on and self.ascii_video is None:
             try:
                 self.ascii_video = AsciiVideo(self.fb, font_path=font_path(self.settings["ascii_font"]),
                                               saturation=self.settings["ascii_saturation"],
                                               line_trim=self.settings["ascii_line_trim"])
             except (OSError, ValueError) as exc:
                 print(f"ASCII mode unavailable, playing normal video: {exc}", file=sys.stderr)
+                on = False
+        self.ascii_on = on
+        if save:
+            save_ascii_mode(on)
 
     # -- guide rendering -----------------------------------------------------
 
@@ -192,8 +240,8 @@ class TvDinnerApp:
                               ("MEDIA", MEDIA_ROOT),
                               ("CHANNELS", len(self.channels)),
                               ("PROGRAMS", sum(len(ch["programs"]) for ch in self.channels)),
-                              ("ASCII MODE", "ON" if self.ascii_video else "OFF"),
-                          ])
+                              ("ASCII MODE", "ON " if self.ascii_on else "OFF"),
+                          ], selected=3)
         self.fb.write_surface(self.surface)
 
     def render_guide(self):
@@ -216,11 +264,12 @@ class TvDinnerApp:
     def enter_playback(self):
         channel_index, program_index = self.nav.current_indices()
         self.fb.fill_black()  # nothing stale left over for a DRM-master hiccup to expose
-        mpv = MpvController(audio_only=self.ascii_video is not None)
+        video = self.ascii_video if self.ascii_on else None
+        mpv = MpvController(audio_only=video is not None)
         # In ASCII mode the indicators are drawn by AsciiVideo, which takes
         # mpv's overlay-add calls in its place.
-        overlays = OverlayManager(self.ascii_video or mpv, self.overlay_renderer)
-        self.player = PlaybackController(mpv, overlays, self.channels, video=self.ascii_video)
+        overlays = OverlayManager(video or mpv, self.overlay_renderer)
+        self.player = PlaybackController(mpv, overlays, self.channels, video=video)
         self.player.start(MEDIA_ROOT, channel_index, program_index)
         self.selector.register(mpv.fileno(), selectors.EVENT_READ, data="mpv")
         self.mode = "playback"
@@ -239,7 +288,8 @@ class TvDinnerApp:
         # BACK toggles the fleet-wide ABOUT screen from the guide (TV
         # DINNER's home level) -- 2026-09-22, replacing BACK-plays-the-
         # highlighted-program (OK still does that). ABOUT is modal: only
-        # BACK (and Home, handled in handle_keycode) do anything there.
+        # BACK, LEFT/RIGHT (toggle ASCII MODE, 2026-10-22) and Home
+        # (handled in handle_keycode) do anything there.
         if code == ecodes.KEY_BACK:
             self.about_active = not self.about_active
             if self.about_active:
@@ -248,6 +298,9 @@ class TvDinnerApp:
                 self.render_guide()
             return
         if self.about_active:
+            if code in (ecodes.KEY_LEFT, ecodes.KEY_RIGHT):
+                self.set_ascii_mode(not self.ascii_on)
+                self.render_about()
             return
         if code == ecodes.KEY_UP:
             self.nav.handle_up()
