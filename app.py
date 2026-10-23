@@ -30,6 +30,7 @@ from overlay import OverlayManager, OverlayRenderer
 from parsing import format_clock_12h, format_duration
 from player import PlaybackController
 from ascii_video import AsciiVideo, font_path
+from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
 
 VERSION = "1.3"
 
@@ -41,9 +42,13 @@ ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.ini")
 GUIDE_SELECT_TIMEOUT_S = 1.0
 PLAYBACK_SELECT_TIMEOUT_S = 0.2
-# ASCII mode draws its own frames, so the loop has to come around far more
-# often than the 0.2s that's plenty for overlay timeouts.
-ASCII_SELECT_TIMEOUT_S = 0.005
+# ASCII/PIXEL modes draw their own frames, so the loop has to come around
+# far more often than the 0.2s that's plenty for overlay timeouts.
+FB_VIDEO_SELECT_TIMEOUT_S = 0.005
+
+# VIDEO MODE (settings.ini video_mode, or the ABOUT screen) -- in this order
+# on the ABOUT screen's LEFT/RIGHT cycle. "normal" = mpv draws the video.
+VIDEO_MODES = ("normal", "ascii", "pixel")
 
 OK_CODES = (ecodes.KEY_ENTER, ecodes.KEY_KPENTER, ecodes.BTN_LEFT, ecodes.BTN_MOUSE)
 BACK_CODES = (ecodes.KEY_Q, ecodes.KEY_ESC, ecodes.KEY_BACK, ecodes.KEY_COMPOSE)
@@ -65,6 +70,10 @@ ABOUT_MARGIN_Y = 48  # keeps title/logo inside the CRT's visible area
 ABOUT_LINE_GAP = 8
 ABOUT_COLUMN_GAP = 16
 LOGO_X_STRETCH = 720 / 640
+# The ABOUT rows LEFT/RIGHT can change (indices into render_about()'s rows);
+# UP/DOWN moves between them.
+ABOUT_VIDEO_MODE_ROW = 3
+ABOUT_PALETTE_ROW = 4
 
 
 def load_about_logo():
@@ -129,19 +138,26 @@ def load_settings(path=SETTINGS_PATH):
     missing file or keys fall back to these defaults."""
     cp = configparser.ConfigParser()
     cp.read(path)
+    # video_mode replaced the on/off ascii_mode (2026-10-23); an old file's
+    # ascii_mode still counts until the ABOUT screen first saves video_mode.
+    legacy = "ascii" if cp.getboolean("playback", "ascii_mode", fallback=False) else "normal"
+    video_mode = cp.get("playback", "video_mode", fallback=legacy).strip().lower()
     return {
-        "ascii_mode": cp.getboolean("playback", "ascii_mode", fallback=False),
+        "video_mode": video_mode if video_mode in VIDEO_MODES else "normal",
+        "pixel_palette": palette_name(cp.get("playback", "pixel_palette", fallback="NES")),
+        "pixel_size": parse_size(cp.get("playback", "pixel_size", fallback="256x192")),
         "ascii_saturation": cp.getfloat("playback", "ascii_saturation", fallback=3.0),
         "ascii_font": cp.get("playback", "ascii_font", fallback="Lat15-VGA8"),
         "ascii_line_trim": cp.getint("playback", "ascii_line_trim", fallback=0),
     }
 
 
-def save_ascii_mode(on, path=SETTINGS_PATH):
-    """Write ascii_mode back to settings.ini so an ABOUT-screen toggle
-    survives a restart. Edits just that one line (or adds it under
-    [playback]) so the file's comments and other keys stay as they are."""
-    line = f"ascii_mode = {'yes' if on else 'no'}\n"
+def save_playback_setting(key, value, replaces=None, path=SETTINGS_PATH):
+    """Write one [playback] key back to settings.ini so an ABOUT-screen
+    change survives a restart. Edits just that one line (or the line of an
+    older key it `replaces`, or adds it under [playback]) so the file's
+    comments and other keys stay as they are."""
+    line = f"{key} = {value}\n"
     try:
         with open(path) as f:
             lines = f.readlines()
@@ -152,7 +168,7 @@ def save_ascii_mode(on, path=SETTINGS_PATH):
         stripped = text.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             section = stripped[1:-1].strip()
-        elif section == "playback" and stripped.split("=")[0].strip() == "ascii_mode":
+        elif section == "playback" and stripped.split("=")[0].strip() in (key, replaces):
             lines[i] = line
             break
     else:
@@ -166,7 +182,7 @@ def save_ascii_mode(on, path=SETTINGS_PATH):
         with open(path, "w") as f:
             f.writelines(lines)
     except OSError as exc:
-        print(f"Couldn't save ascii_mode to {path}: {exc}", file=sys.stderr)
+        print(f"Couldn't save {key} to {path}: {exc}", file=sys.stderr)
 
 
 class TvDinnerApp:
@@ -200,28 +216,50 @@ class TvDinnerApp:
         self.about_body_font = pygame.font.Font(about_font_path, 26)
         self.about_logo = load_about_logo()
         self.about_active = False
+        self.about_row = ABOUT_VIDEO_MODE_ROW
 
-        # ASCII mode (settings.ini, or LEFT/RIGHT on the ABOUT screen) --
-        # stays OFF if its font or ffmpeg can't be set up on this machine.
-        self.ascii_video = None
-        self.ascii_on = False
-        if self.settings["ascii_mode"]:
-            self.set_ascii_mode(True, save=False)
+        # VIDEO MODE (settings.ini, or the ABOUT screen): ASCII/PIXEL draw
+        # the picture themselves (built lazily, kept once built); either
+        # falls back to normal video if it can't be set up on this machine.
+        self.fb_videos = {}
+        self.video_mode = "normal"
+        self.pixel_palette = self.settings["pixel_palette"]
+        self.set_video_mode(self.settings["video_mode"], save=False)
 
-    def set_ascii_mode(self, on, save=True):
+    def set_video_mode(self, mode, save=True):
         """Only called from the guide/ABOUT, never mid-playback -- the
         next enter_playback() picks it up."""
-        if on and self.ascii_video is None:
+        if mode != "normal" and mode not in self.fb_videos:
             try:
-                self.ascii_video = AsciiVideo(self.fb, font_path=font_path(self.settings["ascii_font"]),
-                                              saturation=self.settings["ascii_saturation"],
-                                              line_trim=self.settings["ascii_line_trim"])
+                if mode == "ascii":
+                    video = AsciiVideo(self.fb, font_path=font_path(self.settings["ascii_font"]),
+                                       saturation=self.settings["ascii_saturation"],
+                                       line_trim=self.settings["ascii_line_trim"])
+                else:
+                    video = PixelVideo(self.fb, palette=self.pixel_palette, size=self.settings["pixel_size"])
+                self.fb_videos[mode] = video
             except (OSError, ValueError) as exc:
-                print(f"ASCII mode unavailable, playing normal video: {exc}", file=sys.stderr)
-                on = False
-        self.ascii_on = on
+                print(f"{mode.upper()} mode unavailable, playing normal video: {exc}", file=sys.stderr)
+                mode = "normal"
+        self.video_mode = mode
         if save:
-            save_ascii_mode(on)
+            save_playback_setting("video_mode", mode, replaces="ascii_mode")
+
+    def set_pixel_palette(self, name, save=True):
+        self.pixel_palette = name
+        if "pixel" in self.fb_videos:
+            self.fb_videos["pixel"].set_palette(name)
+        if save:
+            save_playback_setting("pixel_palette", name)
+
+    def change_about_setting(self, step):
+        """LEFT/RIGHT on the ABOUT screen: cycle the highlighted row."""
+        if self.about_row == ABOUT_VIDEO_MODE_ROW:
+            i = VIDEO_MODES.index(self.video_mode)
+            self.set_video_mode(VIDEO_MODES[(i + step) % len(VIDEO_MODES)])
+        else:
+            names = list(PALETTES)
+            self.set_pixel_palette(names[(names.index(self.pixel_palette) + step) % len(names)])
 
     # -- guide rendering -----------------------------------------------------
 
@@ -240,8 +278,9 @@ class TvDinnerApp:
                               ("MEDIA", MEDIA_ROOT),
                               ("CHANNELS", len(self.channels)),
                               ("PROGRAMS", sum(len(ch["programs"]) for ch in self.channels)),
-                              ("ASCII MODE", "ON " if self.ascii_on else "OFF"),
-                          ], selected=3)
+                              ("VIDEO MODE", self.video_mode.upper()),
+                              ("PALETTE", self.pixel_palette),
+                          ], selected=self.about_row)
         self.fb.write_surface(self.surface)
 
     def render_guide(self):
@@ -264,10 +303,10 @@ class TvDinnerApp:
     def enter_playback(self):
         channel_index, program_index = self.nav.current_indices()
         self.fb.fill_black()  # nothing stale left over for a DRM-master hiccup to expose
-        video = self.ascii_video if self.ascii_on else None
+        video = self.fb_videos.get(self.video_mode)
         mpv = MpvController(audio_only=video is not None)
-        # In ASCII mode the indicators are drawn by AsciiVideo, which takes
-        # mpv's overlay-add calls in its place.
+        # In ASCII/PIXEL mode the indicators are drawn by that mode's video,
+        # which takes mpv's overlay-add calls in its place.
         overlays = OverlayManager(video or mpv, self.overlay_renderer)
         self.player = PlaybackController(mpv, overlays, self.channels, video=video)
         self.player.start(MEDIA_ROOT, channel_index, program_index)
@@ -288,8 +327,8 @@ class TvDinnerApp:
         # BACK toggles the fleet-wide ABOUT screen from the guide (TV
         # DINNER's home level) -- 2026-09-22, replacing BACK-plays-the-
         # highlighted-program (OK still does that). ABOUT is modal: only
-        # BACK, LEFT/RIGHT (toggle ASCII MODE, 2026-10-22) and Home
-        # (handled in handle_keycode) do anything there.
+        # BACK, UP/DOWN (pick VIDEO MODE or PALETTE, 2026-10-23), LEFT/RIGHT
+        # (change it) and Home (handled in handle_keycode) do anything there.
         if code == ecodes.KEY_BACK:
             self.about_active = not self.about_active
             if self.about_active:
@@ -298,8 +337,12 @@ class TvDinnerApp:
                 self.render_guide()
             return
         if self.about_active:
-            if code in (ecodes.KEY_LEFT, ecodes.KEY_RIGHT):
-                self.set_ascii_mode(not self.ascii_on)
+            if code in (ecodes.KEY_UP, ecodes.KEY_DOWN):
+                self.about_row = (ABOUT_PALETTE_ROW if self.about_row == ABOUT_VIDEO_MODE_ROW
+                                  else ABOUT_VIDEO_MODE_ROW)
+                self.render_about()
+            elif code in (ecodes.KEY_LEFT, ecodes.KEY_RIGHT):
+                self.change_about_setting(1 if code == ecodes.KEY_RIGHT else -1)
                 self.render_about()
             return
         if code == ecodes.KEY_UP:
@@ -358,7 +401,7 @@ class TvDinnerApp:
                 if self.mode != "playback":
                     timeout = GUIDE_SELECT_TIMEOUT_S
                 elif self.player and self.player.video is not None:
-                    timeout = ASCII_SELECT_TIMEOUT_S
+                    timeout = FB_VIDEO_SELECT_TIMEOUT_S
                 else:
                     timeout = PLAYBACK_SELECT_TIMEOUT_S
                 for key, _ in self.selector.select(timeout=timeout):

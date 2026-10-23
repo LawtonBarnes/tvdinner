@@ -76,30 +76,49 @@ either convention ever needs to change.
   `overlay-add` command.
 - `app.py` ties it together behind one evdev-driven event loop -- the only
   thing reading the remote -- and owns the guide/playback mode switch.
-- `ascii_video.py` is the optional ASCII mode (below).
+- `ascii_video.py` and `pixel_video.py` are the optional ASCII and PIXEL
+  modes (below), sharing `fb_video.py`'s decode/timing/overlay pipeline.
 
-## ASCII mode
+## Video modes
+
+`video_mode` in `settings.ini` (copy `settings.example.ini`) picks how
+playback draws the picture: `normal` (mpv), `ascii` or `pixel`. It's also
+changeable on the ABOUT screen (BACK from the guide): UP/DOWN picks the
+VIDEO MODE or PALETTE row, LEFT/RIGHT changes it, and the change is saved
+back to `settings.ini`. (An older file's `ascii_mode = yes` still means
+`ascii` until the first save.)
+
+In both ASCII and PIXEL mode mpv plays only the audio (same gain
+compensation, pause, mute and auto-advance as normal) and reports its
+playback clock; ffmpeg decodes the video straight down to the mode's small
+grid; numpy turns each small frame into a full one written to `/dev/fb0`,
+with the playback indicators drawn in place of mpv's `overlay-add`. Both
+need `ffmpeg` and fall back to normal video without it.
+
+### ASCII mode
 
 Plays video as colored text characters on black instead of normal video
 -- built for a 2x2 CRT video wall fed at XGA (1024x768), where the Linux
 console's 8x8 VGA font gives a 128x96 character grid, 64x48 per tube: a
-soft SD source becomes crisp lettering. Turn it on per machine in
-`settings.ini` (copy `settings.example.ini`):
-
-    [playback]
-    ascii_mode = yes
-
-mpv plays only the audio (same gain compensation, pause, mute and
-auto-advance as normal), and reports its playback clock; ffmpeg decodes the
-video straight down to one pixel per character cell; each cell's brightness
+soft SD source becomes crisp lettering. ffmpeg decodes the video down to
+one pixel per character cell; each cell's brightness
 picks a character from a density ramp built from the font itself, tinted
 with the cell's own color at full brightness; the whole frame is composed
-in numpy from a glyph atlas and written to `/dev/fb0`. Runs at ~27 fps on
-a Pi 3B+ at 1024x768. The playback indicators are drawn into the text frame
-in place of mpv's `overlay-add`. Needs `ffmpeg` and the console font
-`/usr/share/consolefonts/Lat15-VGA8.psf.gz` (both standard on Raspberry Pi
-OS); if either is missing it falls back to normal video. The ABOUT screen
-shows whether it's on.
+in numpy from a glyph atlas. Runs at ~27 fps on a Pi 3B+ at 1024x768.
+Needs the console font (`ascii_font`, standard on Raspberry Pi OS).
+
+### PIXEL mode
+
+Plays video like an old computer or game console: blocky pixels, a fixed
+limited palette (`pixel_palette`: NES, PICO-8, EGA, C64, GAME BOY, CGA),
+and 8x8 Bayer ordered dithering to fake the in-between colors -- ordered
+rather than error diffusion because its pattern holds still on moving
+video. The default `pixel_size` 256x192 is exactly 4x4 framebuffer pixels
+per chunky pixel at 1024x768; other sizes stretch to fit, nearest
+neighbor. Each frame gets a saturation/contrast boost before the palette
+(pale SD tints would otherwise flatten to gray), and nearest-color is a
+65536-entry RGB565 lookup table built once per palette, so a frame is a
+few milliseconds of numpy.
 
 ## Drive mounts
 

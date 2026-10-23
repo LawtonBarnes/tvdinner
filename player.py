@@ -61,8 +61,8 @@ class PlaybackController:
     def __init__(self, mpv, overlays, channels, video=None):
         self.mpv = mpv
         self.overlays = overlays
-        # ascii_video.AsciiVideo in ASCII mode (mpv then plays audio only and
-        # this draws the picture), None for normal mpv video playback
+        # A fb_video.FramebufferVideo in ASCII/PIXEL mode (mpv then plays
+        # audio only and this draws the picture), None for normal mpv video
         self.video = video
         self.channels = channels  # shared reference to the same channel list the guide uses
         self.channel_index = 0
