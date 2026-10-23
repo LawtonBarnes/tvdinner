@@ -33,7 +33,7 @@ from ascii_video import AsciiVideo, font_path
 from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
 from mask_video import MaskVideo
 
-VERSION = "1.3"
+VERSION = "1.4"
 
 MEDIA_ROOT = "/mnt/tvdinner"
 CACHE_DIR = "/opt/tvdinner-cache"
