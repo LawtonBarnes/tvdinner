@@ -76,23 +76,24 @@ either convention ever needs to change.
   `overlay-add` command.
 - `app.py` ties it together behind one evdev-driven event loop -- the only
   thing reading the remote -- and owns the guide/playback mode switch.
-- `ascii_video.py` and `pixel_video.py` are the optional ASCII and PIXEL
-  modes (below), sharing `fb_video.py`'s decode/timing/overlay pipeline.
+- `ascii_video.py`, `pixel_video.py` and `mask_video.py` are the optional
+  ASCII, PIXEL and DOT MASK modes (below), sharing `fb_video.py`'s
+  decode/timing/overlay pipeline.
 
 ## Video modes
 
 `video_mode` in `settings.ini` (copy `settings.example.ini`) picks how
-playback draws the picture: `normal` (mpv), `ascii` or `pixel`. It's also
-changeable on the ABOUT screen (BACK from the guide): UP/DOWN picks the
-VIDEO MODE or PALETTE row, LEFT/RIGHT changes it, and the change is saved
-back to `settings.ini`. (An older file's `ascii_mode = yes` still means
-`ascii` until the first save.)
+playback draws the picture: `normal` (mpv), `ascii`, `pixel` or `dotmask`.
+It's also changeable on the ABOUT screen (BACK from the guide): UP/DOWN
+picks the VIDEO MODE or PALETTE row, LEFT/RIGHT changes it, and the change
+is saved back to `settings.ini`. (An older file's `ascii_mode = yes` still
+means `ascii` until the first save.)
 
-In both ASCII and PIXEL mode mpv plays only the audio (same gain
+In ASCII, PIXEL and DOT MASK mode mpv plays only the audio (same gain
 compensation, pause, mute and auto-advance as normal) and reports its
 playback clock; ffmpeg decodes the video straight down to the mode's small
 grid; numpy turns each small frame into a full one written to `/dev/fb0`,
-with the playback indicators drawn in place of mpv's `overlay-add`. Both
+with the playback indicators drawn in place of mpv's `overlay-add`. All
 need `ffmpeg` and fall back to normal video without it.
 
 ### ASCII mode
@@ -119,6 +120,20 @@ neighbor. Each frame gets a saturation/contrast boost before the palette
 (pale SD tints would otherwise flatten to gray), and nearest-color is a
 65536-entry RGB565 lookup table built once per palette, so a frame is a
 few milliseconds of numpy.
+
+### DOT MASK mode
+
+Normal full-color video multiplied by a CRT shadow-mask pattern,
+`assets/DOT-MASK.png` (soft red, green and blue phosphor dots on black,
+1024x768 -- a Photoshop Multiply layer over the video), with a brightness
+gain (`dotmask_gain`, default 2.0) to make up for the mask's dark gaps.
+ffmpeg scales to the full framebuffer and hands over RGB565 directly; since
+every mask pixel lights exactly one channel, the multiply is a small
+(mask shade, channel value) lookup table -- ~19ms a frame on a Pi 3B+,
+~24 fps on the XGA wall. mpv can't do this itself: its `overlay-add` only
+alpha-blends, and ffmpeg's `blend=multiply` filter ran at under half real
+time. A slot-mask version was tried too and dropped -- through the
+composite chain it read as a screen door.
 
 ## Drive mounts
 

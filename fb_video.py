@@ -1,6 +1,7 @@
 """Shared pipeline for the video modes that draw the picture themselves,
 straight into /dev/fb0, instead of handing it to mpv -- ASCII mode
-(ascii_video.py) and PIXEL mode (pixel_video.py).
+(ascii_video.py), PIXEL mode (pixel_video.py) and DOT MASK mode
+(mask_video.py).
 
 How it works:
   * mpv still plays the file, audio only (--vid=no), with the usual gain
@@ -19,7 +20,9 @@ overlay-add -- here this class stands in for that interface
 
 Subclasses set self.cols/self.rows (the decode size) before calling
 FramebufferVideo.__init__, and implement _compose(buf) -> (fb.height,
-fb.width) uint16 RGB565.
+fb.width) uint16 RGB565. PIX_FMT/BYTES_PER_PIXEL/SCALE_FLAGS pick what
+ffmpeg hands over (shrinking modes want area-averaged rgb24; a full-size
+mode can take the framebuffer's own RGB565 directly).
 """
 
 import queue
@@ -39,6 +42,10 @@ OVERLAY_SPACE = (720, 480)
 
 
 class FramebufferVideo:
+    PIX_FMT = "rgb24"
+    BYTES_PER_PIXEL = 3
+    SCALE_FLAGS = "area"
+
     def __init__(self, fb):
         if shutil.which("ffmpeg") is None:
             raise OSError("ffmpeg not installed")
@@ -63,11 +70,11 @@ class FramebufferVideo:
         self.pending = None
         self.shown_index = -1
         self.clock_pos = None
-        frame_bytes = self.cols * self.rows * 3
+        frame_bytes = self.cols * self.rows * self.BYTES_PER_PIXEL
         self.proc = subprocess.Popen(
             ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", path, "-an", "-sn",
-             "-vf", f"fps={FPS},scale={self.cols}:{self.rows}:flags=area",
-             "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
+             "-vf", f"fps={FPS},scale={self.cols}:{self.rows}:flags={self.SCALE_FLAGS}",
+             "-pix_fmt", self.PIX_FMT, "-f", "rawvideo", "pipe:1"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
         proc, frames = self.proc, self.frames

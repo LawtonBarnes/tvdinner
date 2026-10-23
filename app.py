@@ -31,6 +31,7 @@ from parsing import format_clock_12h, format_duration
 from player import PlaybackController
 from ascii_video import AsciiVideo, font_path
 from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
+from mask_video import MaskVideo
 
 VERSION = "1.3"
 
@@ -42,13 +43,15 @@ ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.ini")
 GUIDE_SELECT_TIMEOUT_S = 1.0
 PLAYBACK_SELECT_TIMEOUT_S = 0.2
-# ASCII/PIXEL modes draw their own frames, so the loop has to come around
+# ASCII/PIXEL/DOT MASK draw their own frames, so the loop has to come around
 # far more often than the 0.2s that's plenty for overlay timeouts.
 FB_VIDEO_SELECT_TIMEOUT_S = 0.005
 
 # VIDEO MODE (settings.ini video_mode, or the ABOUT screen) -- in this order
 # on the ABOUT screen's LEFT/RIGHT cycle. "normal" = mpv draws the video.
-VIDEO_MODES = ("normal", "ascii", "pixel")
+VIDEO_MODES = ("normal", "ascii", "pixel", "dotmask")
+VIDEO_MODE_LABELS = {"normal": "NORMAL", "ascii": "ASCII", "pixel": "PIXEL", "dotmask": "DOT MASK"}
+DOT_MASK_FILE = "DOT-MASK.png"  # in ASSET_DIR -- see mask_video.py
 
 OK_CODES = (ecodes.KEY_ENTER, ecodes.KEY_KPENTER, ecodes.BTN_LEFT, ecodes.BTN_MOUSE)
 BACK_CODES = (ecodes.KEY_Q, ecodes.KEY_ESC, ecodes.KEY_BACK, ecodes.KEY_COMPOSE)
@@ -146,6 +149,7 @@ def load_settings(path=SETTINGS_PATH):
         "video_mode": video_mode if video_mode in VIDEO_MODES else "normal",
         "pixel_palette": palette_name(cp.get("playback", "pixel_palette", fallback="NES")),
         "pixel_size": parse_size(cp.get("playback", "pixel_size", fallback="256x192")),
+        "dotmask_gain": cp.getfloat("playback", "dotmask_gain", fallback=2.0),
         "ascii_saturation": cp.getfloat("playback", "ascii_saturation", fallback=3.0),
         "ascii_font": cp.get("playback", "ascii_font", fallback="Lat15-VGA8"),
         "ascii_line_trim": cp.getint("playback", "ascii_line_trim", fallback=0),
@@ -218,8 +222,8 @@ class TvDinnerApp:
         self.about_active = False
         self.about_row = ABOUT_VIDEO_MODE_ROW
 
-        # VIDEO MODE (settings.ini, or the ABOUT screen): ASCII/PIXEL draw
-        # the picture themselves (built lazily, kept once built); either
+        # VIDEO MODE (settings.ini, or the ABOUT screen): ASCII/PIXEL/DOT MASK draw
+        # the picture themselves (built lazily, kept once built); each
         # falls back to normal video if it can't be set up on this machine.
         self.fb_videos = {}
         self.video_mode = "normal"
@@ -235,10 +239,12 @@ class TvDinnerApp:
                     video = AsciiVideo(self.fb, font_path=font_path(self.settings["ascii_font"]),
                                        saturation=self.settings["ascii_saturation"],
                                        line_trim=self.settings["ascii_line_trim"])
-                else:
+                elif mode == "pixel":
                     video = PixelVideo(self.fb, palette=self.pixel_palette, size=self.settings["pixel_size"])
+                else:
+                    video = MaskVideo(self.fb, os.path.join(ASSET_DIR, DOT_MASK_FILE), gain=self.settings["dotmask_gain"])
                 self.fb_videos[mode] = video
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, pygame.error) as exc:
                 print(f"{mode.upper()} mode unavailable, playing normal video: {exc}", file=sys.stderr)
                 mode = "normal"
         self.video_mode = mode
@@ -278,7 +284,7 @@ class TvDinnerApp:
                               ("MEDIA", MEDIA_ROOT),
                               ("CHANNELS", len(self.channels)),
                               ("PROGRAMS", sum(len(ch["programs"]) for ch in self.channels)),
-                              ("VIDEO MODE", self.video_mode.upper()),
+                              ("VIDEO MODE", VIDEO_MODE_LABELS[self.video_mode]),
                               ("PALETTE", self.pixel_palette),
                           ], selected=self.about_row)
         self.fb.write_surface(self.surface)
@@ -305,7 +311,7 @@ class TvDinnerApp:
         self.fb.fill_black()  # nothing stale left over for a DRM-master hiccup to expose
         video = self.fb_videos.get(self.video_mode)
         mpv = MpvController(audio_only=video is not None)
-        # In ASCII/PIXEL mode the indicators are drawn by that mode's video,
+        # In ASCII/PIXEL/DOT MASK the indicators are drawn by that mode's video,
         # which takes mpv's overlay-add calls in its place.
         overlays = OverlayManager(video or mpv, self.overlay_renderer)
         self.player = PlaybackController(mpv, overlays, self.channels, video=video)
