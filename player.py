@@ -29,31 +29,40 @@ playback there, but panning through channels via remote while *playing*
 doesn't retroactively move the guide's own cursor (matches the mental
 model: the guide is where you browse, playback is where you watch).
 
-**Per-file gain compensation (2026-09-17):** the indexer's volumedetect
-pass measured wildly inconsistent peak levels across the library (these
-are YouTube rips, not a mastered source) -- 37% of files already sit at
-0 dB peak (zero headroom) while the quietest is over 20 dB below that.
-_load_current() applies a static, boost-only gain per file so quiet
-tracks get turned up to roughly match the loud ones -- this is NOT a
-live/dynamic auto-leveler (the user was explicit about not wanting
-that): the gain is computed once from the indexer's stored peak value
-and set as a fixed mpv audio filter for that file's entire playback,
-identical in spirit to the fleet's line-level-PCM-enforced convention
-elsewhere ([[project_bars]]/[[project_mcbrain]]) -- a fixed level
-decided in advance, not something that reacts to the audio as it plays.
+**Per-file gain compensation:** these are YouTube rips, not a mastered
+source, and their levels are all over the map. _load_current() applies a
+static gain per file -- NOT a live/dynamic auto-leveler (the user was
+explicit about not wanting that): the gain is computed once from the
+indexer's stored measurements and set as a fixed mpv audio filter for
+that file's entire playback, identical in spirit to the fleet's
+line-level-PCM-enforced convention elsewhere ([[project_bars]]/
+[[project_mcbrain]]) -- a fixed level decided in advance, not something
+that reacts to the audio as it plays.
+  * 2026-10-23: loudness matching. The indexer measures each file's
+    integrated loudness (EBU R128 LUFS) and sample peak; every file is
+    turned up or down to TARGET_LUFS, so videos play at the same
+    perceived loudness. A boost never pushes the peak past
+    PEAK_CEILING_DB (no clipping, and no limiter), so a few quiet tracks
+    with loud peaks stay a little under the target.
+  * 2026-09-17 (fallback for index entries without loudness data):
+    boost-only, toward a -1 dB peak -- volumedetect showed 37% of files
+    at 0 dB peak while the quietest sat 20+ dB below.
 """
 
 INDICATOR_DURATION_S = 2.0
 CH_INDICATOR_DURATION_S = INDICATOR_DURATION_S * 2  # CH indicator stays up ~double as long (user request)
 
-# Boost-only gain compensation target -- see the module docstring. Tracks
-# already at or above this peak get zero adjustment (nothing to gain, and
-# never attenuated); quieter ones get turned up toward it.
+# Loudness matching -- see the module docstring. Every file is turned up or
+# down to this integrated loudness...
+TARGET_LUFS = -14.0
+# ...except that a boost stops where the file's peak would pass this.
+PEAK_CEILING_DB = -1.0
+# Fallback for entries without loudness data: boost-only, toward this peak.
 TARGET_PEAK_DB = -1.0
-# Safety ceiling on the computed boost itself, independent of the target
-# above -- guards against a bad/corrupt peak_volume_db value ever producing
-# an absurd gain. The real library's worst case (Megadeth - Symphony Of
-# Destruction) only needs +20.3dB, comfortably under this.
+# Safety limit on any computed gain, either direction -- guards against a
+# bad/corrupt measurement ever producing an absurd gain. (Under the old
+# peak-only scheme the library's worst case, Megadeth - Symphony Of
+# Destruction, needed +20.3dB.)
 MAX_GAIN_DB = 24.0
 
 
@@ -78,10 +87,17 @@ class PlaybackController:
         return f"{media_root}/{program['relpath']}"
 
     def _gain_for(self, program):
-        peak = program.get("peak_volume_db")
-        if peak is None:
-            return 0.0  # no measurement (old cache entry, or a failed probe) -- leave it alone
-        return min(MAX_GAIN_DB, max(0.0, TARGET_PEAK_DB - peak))
+        lufs = program.get("integrated_lufs")
+        if lufs is None:
+            peak = program.get("peak_volume_db")
+            if peak is None:
+                return 0.0  # no measurement (old cache entry, or a failed probe) -- leave it alone
+            return min(MAX_GAIN_DB, max(0.0, TARGET_PEAK_DB - peak))
+        gain = TARGET_LUFS - lufs
+        peak = program.get("peak_db")
+        if gain > 0 and peak is not None:
+            gain = min(gain, max(0.0, PEAK_CEILING_DB - peak))
+        return max(-MAX_GAIN_DB, min(MAX_GAIN_DB, gain))
 
     def start(self, media_root, channel_index, program_index):
         self.media_root = media_root

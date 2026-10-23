@@ -61,8 +61,11 @@ either convention ever needs to change.
 - `indexer.py` walks the drive once (in the background, not on-demand) and
   caches each channel's program list -- sorted by file modified date, not
   alphabetically, so a channel doesn't always play in the same order --
-  plus a probed duration and a generated thumbnail per file, to
-  `cache/index.json` / `cache/thumbnails/`.
+  plus a probed duration, a generated thumbnail and the audio's loudness
+  (ffmpeg `ebur128`: integrated LUFS and sample peak) per file, to
+  `cache/index.json` / `cache/thumbnails/`. `player.py` turns each file
+  up or down to the same loudness (`TARGET_LUFS`) with a fixed per-file
+  gain -- boosts stop short of a -1 dB peak, so nothing clips.
 - `navigation.py` is the guide's pure state machine: which channel/program
   is highlighted, scrolling behavior at the grid's edges, wraparound.
 - `guide_render.py` / `layout.py` / `text_layout.py` draw the guide itself

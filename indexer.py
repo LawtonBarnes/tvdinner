@@ -1,20 +1,22 @@
 """Builds/refreshes the TV DINNER media index: walks the drive, sorts each
 channel's files by mtime (deliberately not alphabetical, per design), and
 caches duration (ffprobe), a 160x120 thumbnail (ffmpeg, grabbed from ~1/3
-into the file rather than right at the start), and peak/mean audio volume
-(ffmpeg's volumedetect filter) per file so the guide never has to shell
-out live while the user is navigating.
+into the file rather than right at the start), and the audio's loudness
+(ffmpeg's ebur128 filter: integrated loudness in LUFS plus peak level) per
+file so the guide never has to shell out live while the user is navigating.
 
-peak_volume_db/mean_volume_db are stored for future use only -- these
-source videos were ripped from YouTube and their levels are all over the
-map, but nothing here auto-adjusts playback volume. Any per-file gain
-compensation based on this data is a separate, not-yet-built feature.
+The loudness data drives player.py's per-file gain, which plays every video
+at the same loudness (2026-10-23, replacing the earlier boost-only gain
+from volumedetect's peak level -- peak says how close a track is to
+clipping, not how loud it sounds).
 
 Designed to run locally on the machine with the drive physically attached
 (MP) for speed -- writes into a separate cache directory, never onto the
 media drive itself. Re-running is fully manual (no cron/timer) -- see
 project memory for what happens to the index if the drive's content
-changes between runs.
+changes between runs. A cached entry whose file hasn't changed (same mtime)
+is reused as-is; if it predates the loudness fields, only the loudness pass
+runs for it (no new thumbnail/duration probe).
 
 Usage: python3 indexer.py --media /mnt/tvdinner --cache /opt/tvdinner/cache
 """
@@ -39,8 +41,15 @@ THUMB_POSITION_FRACTION = 1 / 3
 DEFAULT_THUMB_TIMESTAMP_S = 5.0
 INDEX_FILENAME = "index.json"
 
-MAX_VOLUME_RE = re.compile(r"max_volume:\s*(-?\d+(?:\.\d+)?) dB")
-MEAN_VOLUME_RE = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB")
+# ebur128's end-of-file summary block ("Integrated loudness: I: -14.2 LUFS"
+# ... "Sample peak: Peak: -0.3 dBFS"); the per-frame lines before it don't
+# match these patterns.
+LUFS_RE = re.compile(r"^\s+I:\s+(-?\d+(?:\.\d+)?|-inf) LUFS", re.MULTILINE)
+PEAK_RE = re.compile(r"^\s+Peak:\s+(-?\d+(?:\.\d+)?|-inf) dBFS", re.MULTILINE)
+# Sample peak, not true peak: mpv's gain is applied to the decoded samples,
+# so clipping depends on those; and true peak's 4x oversampling made the
+# pass ~4x slower on MP's Pi 3B+ (38s vs 9s a file, ~11h vs ~3h a library).
+EBUR128_PEAK_MODE = "sample"
 
 
 def probe_duration_seconds(video_path):
@@ -69,21 +78,24 @@ def generate_thumbnail(video_path, thumb_path, timestamp_seconds, fallback_times
         subprocess.run(cmd, capture_output=True, text=True, check=True)
 
 
-def probe_volume_db(video_path):
-    """Full-file audio pass via ffmpeg's volumedetect filter -- peak
-    (max_volume) and mean_volume in dBFS, both from the same pass since
-    parsing the second regex out of the same stderr output is free.
-    Not used to adjust playback yet -- stored for future use (a per-file
-    gain offset), not applied automatically."""
+def _db(text):
+    return None if text == "-inf" else float(text)
+
+
+def probe_loudness(video_path):
+    """Full-file audio pass via ffmpeg's ebur128 filter -> (integrated
+    loudness in LUFS, peak in dBFS), either None if it couldn't be
+    measured. Integrated loudness is the EBU R128 / streaming-service
+    measure of how loud a track sounds overall (gated, so silent stretches
+    don't drag it down)."""
     result = subprocess.run(
-        ["ffmpeg", "-i", video_path, "-vn", "-af", "volumedetect", "-f", "null", "-"],
+        ["ffmpeg", "-nostdin", "-hide_banner", "-i", video_path, "-vn",
+         "-af", f"ebur128=peak={EBUR128_PEAK_MODE}", "-f", "null", "-"],
         capture_output=True, text=True,
     )
-    max_match = MAX_VOLUME_RE.search(result.stderr)
-    mean_match = MEAN_VOLUME_RE.search(result.stderr)
-    peak_db = float(max_match.group(1)) if max_match else None
-    mean_db = float(mean_match.group(1)) if mean_match else None
-    return peak_db, mean_db
+    lufs = LUFS_RE.findall(result.stderr)
+    peak = PEAK_RE.findall(result.stderr)
+    return (_db(lufs[-1]) if lufs else None), (_db(peak[-1]) if peak else None)
 
 
 def load_existing_index(cache_dir):
@@ -110,6 +122,18 @@ def _write_index(cache_dir, media_root, channels):
     return index
 
 
+def _measure_loudness(program, video_path, relpath, skipped):
+    lufs, peak = probe_loudness(video_path)
+    if lufs is None:
+        skipped.append(f"{relpath}: ebur128 loudness failed to parse ffmpeg output")
+    program["integrated_lufs"] = lufs
+    program["peak_db"] = peak
+    # The old volumedetect fields are superseded -- drop them so a stale
+    # value can never be mistaken for current data.
+    program.pop("peak_volume_db", None)
+    program.pop("mean_volume_db", None)
+
+
 def build_index(media_root, cache_dir, force=False):
     thumb_dir = os.path.join(cache_dir, "thumbnails")
     existing = {} if force else load_existing_index(cache_dir)
@@ -119,9 +143,9 @@ def build_index(media_root, cache_dir, force=False):
     channel_entries = [e for e in sorted(os.scandir(media_root), key=lambda e: e.name) if e.is_dir()]
 
     # Pre-scan just to get an accurate total for progress reporting -- a
-    # full force run redoes ffprobe+ffmpeg+volumedetect per file, taking the
-    # better part of an hour on this hardware, so an "is it hung?" progress
-    # line matters a lot more than it did for the lightweight cached-reuse case.
+    # full force run redoes ffprobe+thumbnail+loudness per file, taking a
+    # couple of hours on this hardware, so an "is it hung?" progress line
+    # matters a lot more than it did for the lightweight cached-reuse case.
     total_files = 0
     for entry in channel_entries:
         try:
@@ -137,6 +161,7 @@ def build_index(media_root, cache_dir, force=False):
 
     start_time = time.monotonic()
     done_files = 0
+    probed_files = 0  # files that needed any ffmpeg work -- the progress estimate's basis
 
     for entry in channel_entries:
         try:
@@ -163,48 +188,51 @@ def build_index(media_root, cache_dir, force=False):
 
             cached = existing.get(relpath)
             if cached and cached.get("mtime") == mtime:
-                programs.append(cached)
                 done_files += 1
-                continue
+                if "integrated_lufs" in cached:
+                    programs.append(cached)
+                    continue
+                # Unchanged file indexed before loudness was measured: keep
+                # its duration/thumbnail, add just the loudness pass.
+                program = dict(cached)
+                _measure_loudness(program, f.path, relpath, skipped)
+                programs.append(program)
+            else:
+                video_path = f.path
+                try:
+                    duration = probe_duration_seconds(video_path)
+                except (subprocess.CalledProcessError, ValueError) as e:
+                    skipped.append(f"{relpath}: ffprobe failed ({e})")
+                    duration = None
 
-            video_path = f.path
-            try:
-                duration = probe_duration_seconds(video_path)
-            except (subprocess.CalledProcessError, ValueError) as e:
-                skipped.append(f"{relpath}: ffprobe failed ({e})")
-                duration = None
+                thumb_timestamp = duration * THUMB_POSITION_FRACTION if duration else DEFAULT_THUMB_TIMESTAMP_S
+                thumb_relpath = os.path.splitext(relpath)[0] + ".jpg"
+                thumb_path = os.path.join(thumb_dir, thumb_relpath)
+                try:
+                    generate_thumbnail(video_path, thumb_path, thumb_timestamp)
+                    thumb_ok = True
+                except subprocess.CalledProcessError as e:
+                    skipped.append(f"{relpath}: ffmpeg thumbnail failed ({e})")
+                    thumb_ok = False
 
-            thumb_timestamp = duration * THUMB_POSITION_FRACTION if duration else DEFAULT_THUMB_TIMESTAMP_S
-            thumb_relpath = os.path.splitext(relpath)[0] + ".jpg"
-            thumb_path = os.path.join(thumb_dir, thumb_relpath)
-            try:
-                generate_thumbnail(video_path, thumb_path, thumb_timestamp)
-                thumb_ok = True
-            except subprocess.CalledProcessError as e:
-                skipped.append(f"{relpath}: ffmpeg thumbnail failed ({e})")
-                thumb_ok = False
+                program = {
+                    "relpath": relpath,
+                    "filename": f.name,
+                    "artist": artist,
+                    "title": title,
+                    "mtime": mtime,
+                    "duration_seconds": duration,
+                    "thumbnail_relpath": thumb_relpath if thumb_ok else None,
+                }
+                _measure_loudness(program, video_path, relpath, skipped)
+                programs.append(program)
+                done_files += 1
 
-            peak_volume_db, mean_volume_db = probe_volume_db(video_path)
-            if peak_volume_db is None:
-                skipped.append(f"{relpath}: volumedetect failed to parse ffmpeg output")
-
-            programs.append({
-                "relpath": relpath,
-                "filename": f.name,
-                "artist": artist,
-                "title": title,
-                "mtime": mtime,
-                "duration_seconds": duration,
-                "thumbnail_relpath": thumb_relpath if thumb_ok else None,
-                "peak_volume_db": peak_volume_db,
-                "mean_volume_db": mean_volume_db,
-            })
-
-            done_files += 1
+            probed_files += 1
             elapsed = time.monotonic() - start_time
-            rate = elapsed / done_files
-            remaining = rate * (total_files - done_files)
+            remaining = elapsed / probed_files * (total_files - done_files)
             print(f"[{done_files}/{total_files}] {relpath} "
+                  f"I {program.get('integrated_lufs')} LUFS, peak {program.get('peak_db')} dB "
                   f"({elapsed / 60:.1f}m elapsed, ~{remaining / 60:.1f}m remaining)", flush=True)
 
         channels.append({
@@ -228,7 +256,7 @@ def main():
     parser.add_argument("--cache", required=True, help="Path to the writable cache directory")
     parser.add_argument("--force", action="store_true",
                          help="Ignore cached mtime matches and re-probe every file "
-                              "(e.g. after adding a new probed field like volumedetect)")
+                              "(thumbnails and durations too, not just loudness)")
     args = parser.parse_args()
 
     start_time = time.monotonic()
