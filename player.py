@@ -53,8 +53,10 @@ INDICATOR_DURATION_S = 2.0
 CH_INDICATOR_DURATION_S = INDICATOR_DURATION_S * 2  # CH indicator stays up ~double as long (user request)
 
 # Loudness matching -- see the module docstring. Every file is turned up or
-# down to this integrated loudness...
-TARGET_LUFS = -14.0
+# down to this integrated loudness... (2026-10-23 full index: library median
+# -13.8 LUFS, but with no limiter a -14 target left 235 of 1104 files short
+# of it, held back by the peak ceiling; -16 leaves 40.)
+TARGET_LUFS = -16.0
 # ...except that a boost stops where the file's peak would pass this.
 PEAK_CEILING_DB = -1.0
 # Fallback for entries without loudness data: boost-only, toward this peak.
