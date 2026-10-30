@@ -313,7 +313,7 @@ class TvDinnerApp:
         mpv = MpvController(audio_only=video is not None)
         # In ASCII/PIXEL/DOT MASK the indicators are drawn by that mode's video,
         # which takes mpv's overlay-add calls in its place.
-        overlays = OverlayManager(video or mpv, self.overlay_renderer)
+        overlays = OverlayManager(video or mpv, self.overlay_renderer, (self.fb.width, self.fb.height))
         self.player = PlaybackController(mpv, overlays, self.channels, video=video)
         self.player.start(MEDIA_ROOT, channel_index, program_index)
         self.selector.register(mpv.fileno(), selectors.EVENT_READ, data="mpv")

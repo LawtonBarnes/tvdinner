@@ -6,10 +6,11 @@ and pushed onto mpv's own video output via its overlay-add IPC command
 -- mpv's built-in mechanism for compositing a bitmap over what it's
 already rendering, so no separate window/compositor is needed.
 
-Positions taken from TV_DINNER_OVERLAY_COORDINATES.csv -- these are in
-the same 720x480 pixel space mpv's output actually fills (the 640x480
-source is stretched to exactly 720x480, --keepaspect=no), so they're
-used directly with no scaling.
+Positions taken from TV_DINNER_OVERLAY_COORDINATES.csv -- these are in a
+720x480 pixel space. overlay-add works in the real output's pixels, so
+OverlayManager scales the positions and bitmaps to the output size (1x on
+a 720x480 CRT, 1.42x/1.6x on PRODUCTION's 1024x768 XGA wall), nearest-
+neighbor to keep the pixel font's hard edges.
 """
 
 import os
@@ -19,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 FONT_PATH = "VCR_OSD_MONO_1.001.ttf"
 FONT_SIZE = 48
+OVERLAY_SPACE = (720, 480)  # the coordinate space of POSITIONS and FONT_SIZE
 GREEN = (0, 255, 0, 255)
 RED = (255, 0, 0, 255)
 BLACK = (0, 0, 0, 255)
@@ -70,18 +72,23 @@ class OverlayManager:
     """Tracks which named overlay slots are currently visible and their
     auto-hide deadlines. Call update() every loop iteration."""
 
-    def __init__(self, mpv, renderer):
+    def __init__(self, mpv, renderer, output_size=OVERLAY_SPACE):
         self.mpv = mpv
         self.renderer = renderer
+        self.sx = output_size[0] / OVERLAY_SPACE[0]
+        self.sy = output_size[1] / OVERLAY_SPACE[1]
         self.hide_at = {}  # name -> monotonic deadline, or None for persistent
         self.visible = set()
 
     def show(self, name, text, color, duration=None):
         image = self.renderer.render_bgra(text, color)
+        image = image.resize((max(1, round(image.width * self.sx)), max(1, round(image.height * self.sy))),
+                             Image.NEAREST)
         raw_path = os.path.join(SHM_DIR, f"tvdinner_overlay_{OVERLAY_IDS[name]}.raw")
         with open(raw_path, "wb") as f:
             f.write(image.tobytes("raw", "BGRA"))
         x, y = POSITIONS[name]
+        x, y = round(x * self.sx), round(y * self.sy)
         w, h = image.size
         self.mpv.add_overlay(OVERLAY_IDS[name], x, y, raw_path, w, h, w * 4)
         self.visible.add(name)

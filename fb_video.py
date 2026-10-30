@@ -36,10 +36,6 @@ import numpy as np
 FPS = 30
 QUEUE_FRAMES = 8
 
-# The overlay coordinates/sizes in overlay.py are for the 720x480 frame
-# mpv normally fills; scale them to whatever this framebuffer is.
-OVERLAY_SPACE = (720, 480)
-
 
 class FramebufferVideo:
     PIX_FMT = "rgb24"
@@ -175,17 +171,9 @@ class FramebufferVideo:
     def add_overlay(self, overlay_id, x, y, raw_path, width, height, stride):
         with open(raw_path, "rb") as f:
             bgra = np.frombuffer(f.read(), dtype=np.uint8).reshape(height, stride // 4, 4)[:, :width]
-        sx = self.fb.width / OVERLAY_SPACE[0]
-        sy = self.fb.height / OVERLAY_SPACE[1]
-        # nearest-neighbor scale to this framebuffer's size (keeps the
-        # pixel font's hard edges)
-        out_h, out_w = max(1, round(height * sy)), max(1, round(width * sx))
-        ys = (np.arange(out_h) / sy).astype(np.intp).clip(0, height - 1)
-        xs = (np.arange(out_w) / sx).astype(np.intp).clip(0, width - 1)
-        img = bgra[ys][:, xs]
-        b, g, r, a = (img[:, :, k].astype(np.uint16) for k in range(4))
+        b, g, r, a = (bgra[:, :, k].astype(np.uint16) for k in range(4))
         pix = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-        self.overlays[overlay_id] = (round(x * sx), round(y * sy), pix, a > 127)
+        self.overlays[overlay_id] = (x, y, pix, a > 127)
         self.dirty = True
 
     def remove_overlay(self, overlay_id):
