@@ -1,5 +1,7 @@
 # TV DINNER
 
+> **Standalone:** runs on a single Raspberry Pi with the videos on a local USB drive or folder (see "Installing on a single Pi"). The fleet setup (drive on MP, shared over Samba) is optional.
+
 An EPG-style (Electronic Program Guide) front end for browsing and playing
 MP4s stored on a USB drive, streamed to whichever Pi puppet(s) it's
 assigned to. Modeled on an old-school channel-surfing cable box guide:
@@ -7,10 +9,6 @@ UP/DOWN/LEFT/RIGHT browse a grid of channels x NOW/NEXT/LATER programs,
 OK (or BACK) plays the highlighted program, and once playing, UP/DOWN
 change channel, LEFT/RIGHT skip within the current channel, and BACK
 returns to the guide.
-
-**Standalone:** runs on a single Raspberry Pi with the videos on a local
-USB drive or folder. The fleet setup (drive on MP, shared over Samba, see
-"Drive mounts" below) is optional.
 
 ## Installing on a single Pi
 
