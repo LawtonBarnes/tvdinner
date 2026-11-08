@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs app.py bound to the physical console (tty1) regardless of how
+# this was invoked. If we're already sitting at tty1 (physical
+# keyboard/autologin), just run it directly. Otherwise (SSH, or no
+# controlling terminal at all) re-exec ourselves onto tty1 via openvt,
+# forcing it to take over from whatever's there.
+if [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
+    exec python3 /opt/tvdinner/app.py "$@"
+else
+    exec sudo openvt -f -c 1 -s -w -- python3 /opt/tvdinner/app.py "$@"
+fi

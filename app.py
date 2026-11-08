@@ -35,9 +35,10 @@ from mask_video import MaskVideo
 
 VERSION = "1.4"
 
-MEDIA_ROOT = "/mnt/tvdinner"
-CACHE_DIR = "/opt/tvdinner-cache"
-INDEX_PATH = os.path.join(CACHE_DIR, "index.json")
+# Where the videos and indexer.py's cache live -- settings.ini [library]
+# media_root / cache_dir override these (see load_settings()).
+DEFAULT_MEDIA_ROOT = "/mnt/tvdinner"
+DEFAULT_CACHE_DIR = "/opt/tvdinner-cache"
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.ini")
@@ -153,6 +154,8 @@ def load_settings(path=SETTINGS_PATH):
         "ascii_saturation": cp.getfloat("playback", "ascii_saturation", fallback=3.0),
         "ascii_font": cp.get("playback", "ascii_font", fallback="Lat15-VGA8"),
         "ascii_line_trim": cp.getint("playback", "ascii_line_trim", fallback=0),
+        "media_root": cp.get("library", "media_root", fallback=DEFAULT_MEDIA_ROOT),
+        "cache_dir": cp.get("library", "cache_dir", fallback=DEFAULT_CACHE_DIR),
     }
 
 
@@ -192,9 +195,19 @@ def save_playback_setting(key, value, replaces=None, path=SETTINGS_PATH):
 class TvDinnerApp:
     def __init__(self):
         self.settings = load_settings()
-        channels = load_index(INDEX_PATH)
+        self.media_root = self.settings["media_root"]
+        self.cache_dir = self.settings["cache_dir"]
+        # No index yet (a fresh install that hasn't run indexer.py), an
+        # unreadable one, or one with no playable programs: show the NO MEDIA
+        # FOUND screen instead of crashing (render_guide()). Restart the app
+        # after indexing.
+        try:
+            channels = load_index(os.path.join(self.cache_dir, "index.json"))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"No usable index in {self.cache_dir}: {exc}", file=sys.stderr)
+            channels = []
         self.channels = channels
-        self.nav = NavigationState(channels)
+        self.nav = NavigationState(channels) if channels else None
 
         pygame.display.set_mode(layout.CANVAS_SIZE)  # headless (dummy driver); needed for .convert()
         self.font = pygame.font.Font(os.path.join(ASSET_DIR, layout.FONT_PATH_GUIDE), layout.GUIDE_FONT_SIZE)
@@ -270,7 +283,7 @@ class TvDinnerApp:
     # -- guide rendering -----------------------------------------------------
 
     def _thumbnail_surface(self, program):
-        path = thumbnail_path(CACHE_DIR, program)
+        path = thumbnail_path(self.cache_dir, program)
         if path:
             try:
                 return pygame.image.load(path).convert()
@@ -281,7 +294,7 @@ class TvDinnerApp:
     def render_about(self):
         draw_about_screen(self.surface, self.about_title_font, self.about_body_font, self.about_logo,
                           f"TV DINNER {VERSION}", [
-                              ("MEDIA", MEDIA_ROOT),
+                              ("MEDIA", self.media_root),
                               ("CHANNELS", len(self.channels)),
                               ("PROGRAMS", sum(len(ch["programs"]) for ch in self.channels)),
                               ("VIDEO MODE", VIDEO_MODE_LABELS[self.video_mode]),
@@ -289,7 +302,23 @@ class TvDinnerApp:
                           ], selected=self.about_row)
         self.fb.write_surface(self.surface)
 
+    def render_no_media(self):
+        draw_about_screen(self.surface, self.about_title_font, self.about_body_font, self.about_logo,
+                          "NO MEDIA FOUND", [
+                              ("MEDIA", self.media_root),
+                              ("CACHE", self.cache_dir),
+                              ("", ""),
+                              ("1.", "ADD .MP4 FILES"),
+                              ("2.", "RUN INDEXER.PY"),
+                              ("3.", "RESTART TV DINNER"),
+                              ("", "(SEE README)"),
+                          ])
+        self.fb.write_surface(self.surface)
+
     def render_guide(self):
+        if self.nav is None:
+            self.render_no_media()
+            return
         focused = self.nav.focused_program()
         data = {
             "clock": format_clock_12h(datetime.datetime.now()),
@@ -315,7 +344,7 @@ class TvDinnerApp:
         # which takes mpv's overlay-add calls in its place.
         overlays = OverlayManager(video or mpv, self.overlay_renderer, (self.fb.width, self.fb.height))
         self.player = PlaybackController(mpv, overlays, self.channels, video=video)
-        self.player.start(MEDIA_ROOT, channel_index, program_index)
+        self.player.start(self.media_root, channel_index, program_index)
         self.selector.register(mpv.fileno(), selectors.EVENT_READ, data="mpv")
         self.mode = "playback"
 
@@ -342,6 +371,8 @@ class TvDinnerApp:
             else:
                 self.render_guide()
             return
+        if self.nav is None:
+            return  # NO MEDIA FOUND: only BACK (ABOUT) and Home do anything
         if self.about_active:
             if code in (ecodes.KEY_UP, ecodes.KEY_DOWN):
                 self.about_row = (ABOUT_PALETTE_ROW if self.about_row == ABOUT_VIDEO_MODE_ROW

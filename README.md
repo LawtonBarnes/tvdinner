@@ -8,6 +8,42 @@ OK (or BACK) plays the highlighted program, and once playing, UP/DOWN
 change channel, LEFT/RIGHT skip within the current channel, and BACK
 returns to the guide.
 
+**Standalone:** runs on a single Raspberry Pi with the videos on a local
+USB drive or folder. The fleet setup (drive on MP, shared over Samba, see
+"Drive mounts" below) is optional.
+
+## Installing on a single Pi
+
+1. **Dependencies:**
+   ```bash
+   sudo apt-get install -y git mpv ffmpeg python3-pygame python3-evdev python3-numpy python3-pil
+   ```
+2. **Get the code and make your settings file** (`settings.ini` is per
+   machine and not tracked in git):
+   ```bash
+   sudo git clone https://github.com/LawtonBarnes/tvdinner.git /opt/tvdinner
+   sudo cp /opt/tvdinner/settings.example.ini /opt/tvdinner/settings.ini
+   sudo install -m 755 /opt/tvdinner/tvdinner-launcher /usr/local/bin/tvdinner
+   ```
+3. **Point it at your videos.** In `settings.ini` under `[library]`, set
+   `media_root` to the folder holding your channel folders (named as in
+   "Media drive" below) and `cache_dir` to any writable folder for the
+   index and thumbnails. The defaults are `/mnt/tvdinner` and
+   `/opt/tvdinner-cache`.
+4. **Build the index** (once, and again whenever you add videos; it can
+   take a while on a big library, since it probes every file):
+   ```bash
+   sudo mkdir -p /opt/tvdinner-cache
+   sudo python3 /opt/tvdinner/indexer.py --media /mnt/tvdinner --cache /opt/tvdinner-cache
+   ```
+5. **Run it:** `tvdinner`. Composite output on a Pi 3B+ needs the
+   `vc4-fkms-v3d` overlay, same as
+   [BARS](https://github.com/LawtonBarnes/bars) (see its README).
+
+If TV DINNER can't find an index, it shows a **NO MEDIA FOUND** screen
+with the paths it looked in instead of starting the guide. Build the index
+and restart it. Home quits.
+
 ## Media drive: file and folder nomenclature
 
 The drive (labeled `BANGER`) is organized as one folder per channel, each
