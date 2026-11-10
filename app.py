@@ -13,6 +13,7 @@ import datetime
 import os
 import selectors
 import sys
+import time
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -44,6 +45,7 @@ ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.ini")
 GUIDE_SELECT_TIMEOUT_S = 1.0
 PLAYBACK_SELECT_TIMEOUT_S = 0.2
+NO_MEDIA_RETRY_S = 10  # NO MEDIA FOUND re-checks the index this often
 # ASCII/PIXEL/DOT MASK draw their own frames, so the loop has to come around
 # far more often than the 0.2s that's plenty for overlay timeouts.
 FB_VIDEO_SELECT_TIMEOUT_S = 0.005
@@ -199,15 +201,13 @@ class TvDinnerApp:
         self.cache_dir = self.settings["cache_dir"]
         # No index yet (a fresh install that hasn't run indexer.py), an
         # unreadable one, or one with no playable programs: show the NO MEDIA
-        # FOUND screen instead of crashing (render_guide()). Restart the app
-        # after indexing.
-        try:
-            channels = load_index(os.path.join(self.cache_dir, "index.json"))
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            print(f"No usable index in {self.cache_dir}: {exc}", file=sys.stderr)
-            channels = []
-        self.channels = channels
-        self.nav = NavigationState(channels) if channels else None
+        # FOUND screen instead of crashing (render_guide()). run() retries
+        # every NO_MEDIA_RETRY_S, so a share that isn't up yet at boot (MP
+        # and the puppets power on together) recovers on its own.
+        self.channels = []
+        self.nav = None
+        self.last_index_try = 0.0
+        self.try_load_index()
 
         pygame.display.set_mode(layout.CANVAS_SIZE)  # headless (dummy driver); needed for .convert()
         self.font = pygame.font.Font(os.path.join(ASSET_DIR, layout.FONT_PATH_GUIDE), layout.GUIDE_FONT_SIZE)
@@ -302,6 +302,19 @@ class TvDinnerApp:
                           ], selected=self.about_row)
         self.fb.write_surface(self.surface)
 
+    def try_load_index(self):
+        """Load the index into self.channels/self.nav. Returns True once
+        there are programs to show."""
+        self.last_index_try = time.monotonic()
+        try:
+            channels = load_index(os.path.join(self.cache_dir, "index.json"))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"No usable index in {self.cache_dir}: {exc}", file=sys.stderr)
+            channels = []
+        self.channels = channels
+        self.nav = NavigationState(channels) if channels else None
+        return self.nav is not None
+
     def render_no_media(self):
         draw_about_screen(self.surface, self.about_title_font, self.about_body_font, self.about_logo,
                           "NO MEDIA FOUND", [
@@ -310,7 +323,7 @@ class TvDinnerApp:
                               ("", ""),
                               ("1.", "ADD .MP4 FILES"),
                               ("2.", "RUN INDEXER.PY"),
-                              ("3.", "RESTART TV DINNER"),
+                              ("3.", "IT LOADS BY ITSELF"),
                               ("", "(SEE README)"),
                           ])
         self.fb.write_surface(self.surface)
@@ -441,6 +454,9 @@ class TvDinnerApp:
                     timeout = FB_VIDEO_SELECT_TIMEOUT_S
                 else:
                     timeout = PLAYBACK_SELECT_TIMEOUT_S
+                if (self.nav is None and time.monotonic() - self.last_index_try >= NO_MEDIA_RETRY_S
+                        and self.try_load_index() and self.mode == "guide"):
+                    self.render_guide()
                 for key, _ in self.selector.select(timeout=timeout):
                     if key.data == "input":
                         try:
