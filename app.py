@@ -34,7 +34,7 @@ from ascii_video import AsciiVideo, font_path
 from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
 from mask_video import MaskVideo
 
-VERSION = "1.5"
+VERSION = "1.6"
 
 # Where the videos and indexer.py's cache live -- settings.ini [library]
 # media_root / cache_dir override these (see load_settings()).
