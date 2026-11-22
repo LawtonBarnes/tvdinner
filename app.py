@@ -34,7 +34,7 @@ from ascii_video import AsciiVideo, font_path
 from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
 from mask_video import MaskVideo
 
-VERSION = "1.7"
+VERSION = "1.8"
 
 # Where the videos and indexer.py's cache live -- settings.ini [library]
 # media_root / cache_dir override these (see load_settings()).
@@ -478,6 +478,10 @@ class TvDinnerApp:
                         for event in self.player.mpv.read_events():
                             if event.get("event") == "end-file" and event.get("reason") == "eof":
                                 self.player.handle_end_of_file()
+                            elif event.get("event") == "end-file" and event.get("reason") == "error":
+                                self.player.handle_file_error(event.get("file_error"))
+                            elif event.get("event") == "file-loaded":
+                                self.player.handle_file_loaded()
                             elif (event.get("event") == "property-change" and event.get("name") == "time-pos"
                                   and self.player.video is not None):
                                 self.player.video.set_time(event.get("data"))
@@ -486,6 +490,7 @@ class TvDinnerApp:
 
                 if self.mode == "playback" and self.player:
                     self.player.overlays.update()
+                    self.player.poll_error_advance()
                     if self.player.video is not None:
                         self.player.video.tick()
                     if not self.player.mpv.is_running():

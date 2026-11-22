@@ -49,6 +49,9 @@ that reacts to the audio as it plays.
     at 0 dB peak while the quietest sat 20+ dB below.
 """
 
+import syslog
+import time
+
 INDICATOR_DURATION_S = 2.0
 CH_INDICATOR_DURATION_S = INDICATOR_DURATION_S * 2  # CH indicator stays up ~double as long (user request)
 
@@ -66,6 +69,14 @@ TARGET_PEAK_DB = -1.0
 # peak-only scheme the library's worst case, Megadeth - Symphony Of
 # Destruction, needed +20.3dB.)
 MAX_GAIN_DB = 24.0
+
+ERROR_BACKOFF_MAX_S = 30
+
+
+def log(msg):
+    """To the journal (`journalctl -t tvdinner`) -- tty1 is the picture."""
+    syslog.openlog("tvdinner")
+    syslog.syslog(msg)
 
 
 class PlaybackController:
@@ -109,6 +120,7 @@ class PlaybackController:
         self._load_current(show_channel_indicator=True)
 
     def _load_current(self, show_channel_indicator=False):
+        self._error_advance_at = None  # a user skip/channel change supersedes a pending retry
         program = self._program()
         self.mpv.set_audio_gain(self._gain_for(program))
         self.mpv.load_file(self._media_path(self.media_root, program))
@@ -164,6 +176,30 @@ class PlaybackController:
         self.mpv.set_mute(False)
         self.overlays.hide("mute")
         self.overlays.show("vol", "VOL+", (0, 255, 0, 255), duration=INDICATOR_DURATION_S)
+
+    def handle_file_error(self, file_error=None):
+        """mpv ended a file with reason 'error' (couldn't open/read/decode
+        it -- e.g. a share hiccup over WiFi). Before 1.8 this was ignored and
+        mpv just sat idle on a black screen. Now: log it and move on to the
+        next program, backing off (1s, 2s, 4s... up to 30s) while errors keep
+        coming back to back, so an unreachable share retries instead of
+        spinning. A clean file-loaded resets the backoff."""
+        program = self._program()
+        self._error_streak = getattr(self, "_error_streak", 0) + 1
+        delay = min(ERROR_BACKOFF_MAX_S, 2 ** (self._error_streak - 1))
+        log(f"end-file error ({file_error}) on {program['relpath']} -- "
+            f"streak {self._error_streak}, next program in {delay}s")
+        self._error_advance_at = time.monotonic() + delay
+
+    def handle_file_loaded(self):
+        self._error_streak = 0
+
+    def poll_error_advance(self):
+        """Call every loop iteration while playing."""
+        at = getattr(self, "_error_advance_at", None)
+        if at is not None and time.monotonic() >= at:
+            self._error_advance_at = None
+            self._advance_to_next_program()
 
     def handle_end_of_file(self):
         """Called when mpv reports end-file with reason 'eof' (natural end,
