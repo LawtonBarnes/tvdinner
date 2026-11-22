@@ -27,20 +27,36 @@ KD_TEXT = 0x00
 KD_GRAPHICS = 0x01
 
 
+# A framebuffer wider than this (16:9 HD, e.g. HIDEF's 1920x1080) gets a
+# centered 4:3 picture with black side bars -- 4:3 content is NEVER
+# stretched to wide. 720x480 (3:2, non-square pixels on an SD CRT) and
+# 1024x768 stay full-frame.
+WIDE_ASPECT = 1.6
+
+
 class FrameBuffer:
     def __init__(self, dev="/dev/fb0"):
         from pathlib import Path
         sys_dir = Path("/sys/class/graphics") / Path(dev).name
-        self.width, self.height = (int(x) for x in (sys_dir / "virtual_size").read_text().split(","))
+        self.fb_width, self.height = (int(x) for x in (sys_dir / "virtual_size").read_text().split(","))
         self.bpp = int((sys_dir / "bits_per_pixel").read_text())
         self.stride = int((sys_dir / "stride").read_text())
         self.bypp = self.bpp // 8
-        self.row_bytes = self.width * self.bypp
+        if self.bpp not in (16, 32):
+            raise RuntimeError(f"Unsupported framebuffer depth: {self.bpp}bpp")
+        # self.width/height = the picture area everything draws into;
+        # self.x0 = its left edge on the real framebuffer.
+        self.pillarbox = self.fb_width / self.height > WIDE_ASPECT
+        self.width = (self.height * 4 // 3) & ~1 if self.pillarbox else self.fb_width
+        self.x0 = (self.fb_width - self.width) // 2
         size = self.stride * self.height
         self.fd = os.open(dev, os.O_RDWR)
         self.mm = mmap.mmap(self.fd, size, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
-        if self.bpp not in (16, 32):
-            raise RuntimeError(f"Unsupported framebuffer depth: {self.bpp}bpp")
+        dtype = np.uint16 if self.bpp == 16 else np.uint32
+        rows = np.frombuffer(self.mm, dtype=dtype).reshape(self.height, self.stride // self.bypp)
+        self.picture = rows[:, self.x0:self.x0 + self.width]
+        if self.pillarbox:
+            self.fill_black()
 
     def write_surface(self, surface):
         if surface.get_size() != (self.width, self.height):
@@ -50,38 +66,23 @@ class FrameBuffer:
             r = arr[:, :, 0].astype(np.uint16) >> 3
             g = arr[:, :, 1].astype(np.uint16) >> 2
             b = arr[:, :, 2].astype(np.uint16) >> 3
-            raw = ((r << 11) | (g << 5) | b).astype("<u2").tobytes()
+            self.picture[:] = (r << 11) | (g << 5) | b
         else:
-            alpha = np.zeros((self.height, self.width, 1), dtype=np.uint8)
-            raw = np.concatenate([arr[:, :, ::-1], alpha], axis=2).astype(np.uint8).tobytes()
-
-        if self.stride == self.row_bytes:
-            self.mm.seek(0)
-            self.mm.write(raw)
-        else:
-            for y in range(self.height):
-                self.mm.seek(y * self.stride)
-                self.mm.write(raw[y * self.row_bytes : (y + 1) * self.row_bytes])
+            a = arr.astype(np.uint32)
+            self.picture[:] = a[:, :, 2] | (a[:, :, 1] << 8) | (a[:, :, 0] << 16)
 
     def write_raw565(self, frame):
         """Writes an already-composed (height, width) RGB565 uint16 frame
         (ASCII mode, ascii_video.py) -- converted only if the framebuffer
         isn't 16bpp."""
         if self.bpp == 16:
-            raw = frame.astype("<u2", copy=False).tobytes()
+            self.picture[:] = frame
         else:
             f = frame.astype(np.uint32)
             r = ((f >> 11) & 0x1F) * 255 // 31
             g = ((f >> 5) & 0x3F) * 255 // 63
             b = (f & 0x1F) * 255 // 31
-            raw = (b | (g << 8) | (r << 16)).astype("<u4").tobytes()
-        if self.stride == self.row_bytes:
-            self.mm.seek(0)
-            self.mm.write(raw)
-        else:
-            for y in range(self.height):
-                self.mm.seek(y * self.stride)
-                self.mm.write(raw[y * self.row_bytes : (y + 1) * self.row_bytes])
+            self.picture[:] = b | (g << 8) | (r << 16)
 
     def fill_black(self):
         """Paints the whole framebuffer black. Used once when entering
@@ -94,6 +95,7 @@ class FrameBuffer:
         self.mm.write(b"\x00" * (self.stride * self.height))
 
     def close(self):
+        del self.picture  # the numpy view must go before the mmap can close
         self.mm.close()
         os.close(self.fd)
 

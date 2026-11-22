@@ -34,7 +34,7 @@ from ascii_video import AsciiVideo, font_path
 from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
 from mask_video import MaskVideo
 
-VERSION = "1.6"
+VERSION = "1.7"
 
 # Where the videos and indexer.py's cache live -- settings.ini [library]
 # media_root / cache_dir override these (see load_settings()).
@@ -352,7 +352,7 @@ class TvDinnerApp:
         channel_index, program_index = self.nav.current_indices()
         self.fb.fill_black()  # nothing stale left over for a DRM-master hiccup to expose
         video = self.fb_videos.get(self.video_mode)
-        mpv = MpvController(audio_only=video is not None)
+        mpv = MpvController(audio_only=video is not None, pillarbox=self.fb.pillarbox, x_offset=self.fb.x0)
         # In ASCII/PIXEL/DOT MASK the indicators are drawn by that mode's video,
         # which takes mpv's overlay-add calls in its place.
         overlays = OverlayManager(video or mpv, self.overlay_renderer, (self.fb.width, self.fb.height))

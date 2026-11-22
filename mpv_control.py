@@ -53,8 +53,13 @@ SOCKET_CONNECT_POLL_S = 0.05
 
 
 class MpvController:
-    def __init__(self, audio_only=False):
+    def __init__(self, audio_only=False, pillarbox=False, x_offset=0):
+        """pillarbox: a 16:9 screen (framebuffer.WIDE_ASPECT) -- mpv keeps
+        the source aspect (4:3 lands centered with black bars, NEVER
+        stretched) and overlays shift right by x_offset into the picture."""
         self.audio_only = audio_only
+        self.pillarbox = pillarbox
+        self.x_offset = x_offset
         self.proc = None
         self.sock = None
         self._next_request_id = 1
@@ -65,7 +70,7 @@ class MpvController:
         if os.path.exists(SOCKET_PATH):
             os.remove(SOCKET_PATH)
         self.proc = subprocess.Popen(
-            (AUDIO_ONLY_ARGS if self.audio_only else MPV_ARGS) + [f"--input-ipc-server={SOCKET_PATH}"],
+            self._args() + [f"--input-ipc-server={SOCKET_PATH}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + SOCKET_CONNECT_TIMEOUT_S
@@ -124,7 +129,16 @@ class MpvController:
     def quit(self):
         self._send(["quit"])
 
+    def _args(self):
+        if self.audio_only:
+            return AUDIO_ONLY_ARGS
+        if self.pillarbox:
+            return ["--keepaspect=yes" if a == "--keepaspect=no" else a for a in MPV_ARGS]
+        return MPV_ARGS
+
     def add_overlay(self, overlay_id, x, y, raw_path, width, height, stride):
+        if not self.audio_only:
+            x += self.x_offset
         self._send(["overlay-add", overlay_id, x, y, raw_path, 0, "bgra", width, height, stride])
 
     def remove_overlay(self, overlay_id):
