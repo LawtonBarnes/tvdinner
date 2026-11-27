@@ -16,6 +16,10 @@ import sys
 import time
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+# pygame never plays sound here -- mpv does. Without this, pygame.init()
+# opens the ALSA card itself, and on a Pi 5 (vc4-hdmi: one PCM subdevice)
+# that locks mpv out, so every program plays silent.
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 import evdev
 from evdev import ecodes
@@ -34,7 +38,7 @@ from ascii_video import AsciiVideo, font_path
 from pixel_video import PALETTES, PixelVideo, palette_name, parse_size
 from mask_video import MaskVideo
 
-VERSION = "1.8"
+VERSION = "1.9"
 
 # Where the videos and indexer.py's cache live -- settings.ini [library]
 # media_root / cache_dir override these (see load_settings()).
