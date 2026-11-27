@@ -16,6 +16,7 @@ and can become DRM master itself with no extra ceremony.
 
 import json
 import os
+import re
 import selectors
 import socket
 import subprocess
@@ -50,6 +51,46 @@ TIME_POS_OBSERVER_ID = 1
 SOCKET_PATH = "/tmp/tvdinner-mpv.sock"
 SOCKET_CONNECT_TIMEOUT_S = 5
 SOCKET_CONNECT_POLL_S = 0.05
+
+
+def console_drm_mode():
+    """The console's own mode as an mpv --drm-mode value, but only when the
+    connected screen's PREFERRED mode is a different size; otherwise None
+    (mpv's default, the preferred mode, is already right -- HIDEF keeps its
+    native 1080i that way).
+
+    Why: mpv --vo=drm switches to the preferred mode. QUAD's OREI EDID
+    prefers 3840x2160, so every video put the wall at 4K and every gap
+    between videos dropped back to the 1024x768 console -- the OREI
+    re-synced (color bars) on each song change."""
+    try:
+        with open("/sys/class/graphics/fb0/virtual_size") as f:
+            width, height = (int(v) for v in f.read().strip().split(","))
+    except (OSError, ValueError):
+        return None
+    drm = "/sys/class/drm"
+    try:
+        connectors = sorted(os.listdir(drm))
+    except OSError:
+        return None
+    for name in connectors:
+        try:
+            with open(os.path.join(drm, name, "status")) as f:
+                if f.read().strip() != "connected":
+                    continue
+            with open(os.path.join(drm, name, "modes")) as f:
+                preferred = f.readline().strip()  # first line = preferred
+        except OSError:
+            continue
+        # composite on the Pi 3B+ puppets reports "FIXED_MODE", not a size:
+        # leave those alone
+        match = re.match(r"(\d+)x(\d+)", preferred)
+        if not match:
+            continue
+        if (int(match.group(1)), int(match.group(2))) != (width, height):
+            return f"{width}x{height}@60"
+        return None
+    return None
 
 
 class MpvController:
@@ -132,9 +173,13 @@ class MpvController:
     def _args(self):
         if self.audio_only:
             return AUDIO_ONLY_ARGS
+        args = MPV_ARGS
         if self.pillarbox:
-            return ["--keepaspect=yes" if a == "--keepaspect=no" else a for a in MPV_ARGS]
-        return MPV_ARGS
+            args = ["--keepaspect=yes" if a == "--keepaspect=no" else a for a in args]
+        mode = console_drm_mode()
+        if mode:
+            args = args + [f"--drm-mode={mode}"]
+        return args
 
     def add_overlay(self, overlay_id, x, y, raw_path, width, height, stride):
         if not self.audio_only:
